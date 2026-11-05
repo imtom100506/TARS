@@ -139,6 +139,23 @@ test('spoken questions receive activity for their own guild and requesting user'
   f.voice.leave();
 });
 
+test('spoken activity report preserves measured facts without invoking the model', async () => {
+  const { createServerActivity } = require('../src/serverActivity');
+  const tracker = createServerActivity({ store: { read: async () => null, write: async () => {} } });
+  const guild = { id: 'guild', members: { cache: new Map() }, voiceStates: { cache: new Map() } };
+  const context = await tracker.context(guild, 'actividad');
+  const records = [];
+  const f = fixture({ transcribe: async () => 'Cómo va la actividad del servidor',
+    getContext: async () => context, recordConversation: row => records.push(row),
+    askAI: async () => assert.fail('Activity facts must not be rewritten by AI') });
+  await f.voice.handle(f.ctx, 'entrar');
+  const pending = f.voice.handle(f.ctx, 'escuchar');
+  await new Promise(resolve => setImmediate(resolve));
+  f.capture.end(Buffer.alloc(16000)); await pending;
+  assert.match(records.find(row => row.role === 'assistant').text, /Registro parcial desde/);
+  f.voice.leave();
+});
+
 test('explicit invocation resets timer; exit cancels capture without API', async () => {
   const f = fixture(); await f.voice.handle(f.ctx, 'entrar');
   await f.advance(IDLE_MS - 1000);

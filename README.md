@@ -41,6 +41,14 @@ miembros humanos en los servidores y canales cuyos eventos recibe. Los cambios
 de canal o de mute no cuentan como otra conexión; se excluyen bots y mensajes privados.
 No necesita entrar a los canales de voz ni grabar audio para medir presencia.
 
+Las consultas de estadísticas reconocidas se responden directamente desde los
+contadores, sin que la IA reescriba las cifras. Se conservan milisegundos y se
+muestran horas, minutos y segundos sin redondear hacia arriba. Toda respuesta
+indica el inicio del registro y la cobertura parcial. El acumulado entre personas
+no es la duración de una llamada: cuatro personas observadas durante 15 segundos
+suman un minuto de tiempo-persona. Si una sesión ya estaba abierta al arrancar,
+TARS indica que desconoce su inicio real; no atribuye el tramo medido a todo el día.
+
 Puedes preguntar «¿Cómo ha ido la actividad del servidor?», «¿Quién participa más
 en voz hoy?», «¿Cuántas veces se ha conectado @usuario en el histórico?» o
 «Actividad entre 2026-11-01 y 2026-11-05». Usa días de America/Santiago; admite

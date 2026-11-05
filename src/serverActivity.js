@@ -101,7 +101,7 @@ function createServerActivity({ store, now = Date.now,
       if (!state.channelId || state.member?.user.bot || !state.member) continue;
       const k = key(g.id, state.id);
       if (!sessions.has(k)) {
-        sessions.set(k, { guildId: g.id, userId: state.id, at: now() });
+        sessions.set(k, { guildId: g.id, userId: state.id, at: now(), observedSince: now(), unknownStart: true });
         user(g.id, day(now()), state.id).voice = true;
       }
     }
@@ -127,7 +127,8 @@ function createServerActivity({ store, now = Date.now,
         row.voice = true;
         // Moves, mute/deafen changes and sessions already active at startup are not connections.
         if (!oldState.channelId) row.connections++;
-        sessions.set(k, { guildId: gid, userId: uid, at: time });
+        sessions.set(k, { guildId: gid, userId: uid, at: time,
+          observedSince: active?.observedSince ?? time, unknownStart: active?.unknownStart ?? !!oldState.channelId });
       });
     },
     message: message => {
@@ -166,13 +167,15 @@ function createServerActivity({ store, now = Date.now,
         const rows = Object.values(users);
         const label = u => {
           const m = g.members.cache.get(u.id);
-          return { usuario: m?.displayName || m?.user.username || u.id, id: u.id, conexiones: u.connections, minutosVoz: Math.round(u.voiceMs / 60000), mensajes: u.messages };
+          return { usuario: m?.displayName || m?.user.username || u.id, id: u.id, conexiones: u.connections,
+            vozMs: u.voiceMs, minutosVoz: u.voiceMs / 60000, mensajes: u.messages };
         };
         const target = rows.filter(u => u.id === requesterId || question.includes(u.id) || [g.members.cache.get(u.id)?.displayName, g.members.cache.get(u.id)?.user.username].some(n => n && question.toLowerCase().includes(n.toLowerCase())));
         return {
           desde: start === '0000-01-01' ? day(record.since) : start, hasta: end,
           conexiones: rows.reduce((n, u) => n + u.connections, 0), usuariosVoz: rows.filter(u => u.voice).length,
-          minutosVoz: Math.round(rows.reduce((n, u) => n + u.voiceMs, 0) / 60000),
+          vozMs: rows.reduce((n, u) => n + u.voiceMs, 0),
+          minutosVoz: rows.reduce((n, u) => n + u.voiceMs, 0) / 60000,
           mensajes: rows.reduce((n, u) => n + u.messages, 0), autores: rows.filter(u => u.messages).length,
           adjuntos: rows.reduce((n, u) => n + u.attachments, 0), ingresos: joins, salidas: leaves,
           topVoz: rows.filter(u => u.voice).sort((a, b) => b.voiceMs - a.voiceMs || b.connections - a.connections).slice(0, 3).map(label),
@@ -188,8 +191,12 @@ function createServerActivity({ store, now = Date.now,
         'Solo humanos. Registro desde ' + new Date(record.since).toISOString() + '; zona America/Santiago. ' +
         'Cobertura parcial: no incluye antes del registro ni períodos sin conexión del bot; no inventes datos faltantes ni interpretes ausencia de registro como cero real. ' +
         'Para fechas ambiguas pide fechas YYYY-MM-DD. Rankings limitados a 3; desglose diario limitado a últimos 14 días registrados.\n' +
-        JSON.stringify({ ahoraEnVoz: current.length, participantesActualesPrimeros10: current.slice(0, 10).map(s => ({
+        JSON.stringify({ cobertura: { registroDesde: record.since, consultadoEn: time, zona: zone, parcial: true,
+          sesionesActualesConInicioDesconocido: current.filter(s => sessions.get(key(g.id, s.id))?.unknownStart !== false).length },
+          ahoraEnVoz: current.length, participantesActualesPrimeros10: current.slice(0, 10).map(s => ({
           id: s.id, usuario: s.member.displayName || s.id, canal: s.channel?.name || s.channelId,
+          inicioRealConocido: sessions.get(key(g.id, s.id))?.unknownStart === false,
+          observadoDesde: sessions.get(key(g.id, s.id))?.observedSince ?? null,
         })), hoy: summarize(today, today), ...(from !== today || to !== today ? { periodoConsultado: summarize(from, to) } : {}) });
     }),
   };

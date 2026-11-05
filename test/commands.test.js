@@ -27,7 +27,7 @@ test("long output preserves text and unicode within Discord limits", () => {
   assert.ok(chunks.every(chunk => chunk.length <= 1900 && chunk.isWellFormed()));
 });
 
-function bot() {
+function bot(activityContext = 'Actividad de voz: 3 participantes hoy.') {
   const discord = require("discord.js");
   const client = new EventEmitter();
   let logins = 0;
@@ -47,7 +47,8 @@ function bot() {
       if (name === "./moderation") return require("../src/moderation");
       if (name === "./textMute") return { createTextMutes: () => ({ mute: async (...args) => muteCalls.push(args) }) };
       if (name === "./muteStore") return require("../src/muteStore");
-      if (name === './serverActivity') return { createServerActivity: () => ({ message: async () => {}, context: async () => 'Actividad de voz: 3 participantes hoy.' }) };
+      if (name === './activityReply') return require('../src/activityReply');
+      if (name === './serverActivity') return { createServerActivity: () => ({ message: async () => {}, context: async () => activityContext }) };
       if (name === "./boundedMap") return require("../src/boundedMap");
       if (["./usageBudget", "./voiceAudio", "./voice", "./wakeListener", "./voiceLog", "./deleteMessages"].includes(name)) return require(`../src/${name.slice(2)}`);
       throw new Error(name);
@@ -95,6 +96,24 @@ test('ordinary slash and prefix questions receive voice activity without a new c
   });
   assert.equal(aiCalls.length, 2);
   for (const call of aiCalls) assert.match(call[2].context, /Actividad de voz: 3 participantes hoy/);
+});
+
+test('slash and prefix activity metrics bypass LLM rewriting and retain the partial coverage warning', async () => {
+  const { createServerActivity } = require('../src/serverActivity');
+  const guild = { id: 'g', name: 'The Goats', members: { cache: new Map() }, voiceStates: { cache: new Map() } };
+  const tracker = createServerActivity({ store: { read: async () => null, write: async () => {} }, now: () => Date.parse('2026-11-05T21:18:00Z') });
+  const context = await tracker.context(guild, 'actividad');
+  const { client, aiCalls } = bot(context);
+  const request = interaction('tars', '¿Cómo ha ido la actividad del servidor?', guild);
+  await client.listeners('interactionCreate')[0](request);
+  const replies = [];
+  await client.listeners('messageCreate')[0]({
+    content: '!tars Como va la actividad del server', author: { id: '1', username: 'tester' }, guild,
+    channel: { id: '2', sendTyping: async () => {} }, reply: async payload => replies.push(payload),
+  });
+  assert.equal(aiCalls.length, 0);
+  assert.match(request.replies[0].content, /Registro parcial desde/);
+  assert.match(replies[0].content, /Registro parcial desde/);
 });
 
 test("slash and prefix reject invalid summaries before fetching messages", async () => {

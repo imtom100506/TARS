@@ -15,6 +15,7 @@ const { createWakeFactory } = require('./wakeListener');
 const { createVoiceLog } = require('./voiceLog');
 const { deleteMessages, confirmDelete } = require('./deleteMessages');
 const { createServerActivity, MARKER: ACTIVITY_MARKER } = require('./serverActivity');
+const { activityReply } = require('./activityReply');
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages,
@@ -225,8 +226,9 @@ async function execute(ctx, command, argument) {
   void sendLog("mensaje", { usuario: ctx.user.username, canal: ctx.channel.name || "privado", mensaje: text });
   const serverContext = getServerContext(ctx.guild);
   const recent = channelContext.get(ctx.channel.id) || [];
-  const response = await askAI(ctx.user.id, text, {
-    context: `${serverContext}\n${await getActivityContext(ctx.guild, text, ctx.user.id)}\nUsuario que pregunta: ${ctx.user.username} (${ctx.user.id}).\n\nContexto reciente del canal:\n${recent.join("\n")}`,
+  const activityContext = await getActivityContext(ctx.guild, text, ctx.user.id);
+  const response = activityReply(activityContext, text, ctx.user.id) || await askAI(ctx.user.id, text, {
+    context: `${serverContext}\n${activityContext}\nUsuario que pregunta: ${ctx.user.username} (${ctx.user.id}).\n\nContexto reciente del canal:\n${recent.join("\n")}`,
   });
   void sendLog("respuesta", { usuario: ctx.user.username, respuesta: response });
   await ctx.reply(response);
