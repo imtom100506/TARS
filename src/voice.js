@@ -5,7 +5,7 @@ const IDLE_MS = 5 * 60 * 1000;
 const FOLLOWUP_MS = 8000;
 const MAX_AUDIO_BYTES = 12 * 32000;
 
-function createVoice({ client, askAI, audio, recordConversation = () => {}, sendLog = () => {}, enabled = false, api, decoderFactory, wakeFactory = null, now = Date.now,
+function createVoice({ client, askAI, audio, getContext = async () => '', recordConversation = () => {}, sendLog = () => {}, enabled = false, api, decoderFactory, wakeFactory = null, now = Date.now,
   setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   let session, joining = false;
   const load = () => {
@@ -151,7 +151,7 @@ function createVoice({ client, askAI, audio, recordConversation = () => {}, send
       signal.throwIfAborted();
       if (followup) { s.lastCall = now(); schedule(s); }
       recordConversation({ guildId: s.voiceChannel.guild.id, channelId: s.voiceChannel.id, userId, role: 'user', text: question });
-      const reply = await askAI(userId, question, { voice: true, signal });
+      const reply = await askAI(userId, question, { voice: true, signal, context: await getContext(s.voiceChannel.guild, question, userId) });
       signal.throwIfAborted();
       mark('respuesta_ms');
       if (s.closed) return;

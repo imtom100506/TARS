@@ -33,6 +33,34 @@ o acentos; `/escuchar` permite invocarlo manualmente.
 
 ## Consumo y diagnóstico
 
+TARS recibe estadísticas de actividad al conversar por `!tars`, `/tars` o voz,
+sin comandos adicionales y aunque la escucha de voz esté desactivada. Registra
+conexiones a voz, participantes únicos, minutos en voz (no minutos hablando),
+rankings por duración y conexiones, mensajes, adjuntos e ingresos/salidas de
+miembros humanos en los servidores y canales cuyos eventos recibe. Los cambios
+de canal o de mute no cuentan como otra conexión; se excluyen bots y mensajes privados.
+No necesita entrar a los canales de voz ni grabar audio para medir presencia.
+
+Puedes preguntar «¿Cómo ha ido la actividad del servidor?», «¿Quién participa más
+en voz hoy?», «¿Cuántas veces se ha conectado @usuario en el histórico?» o
+«Actividad entre 2026-11-01 y 2026-11-05». Usa días de America/Santiago; admite
+hoy, ayer, anteayer, últimos N días, esta semana, este mes e histórico. Los rankings
+muestran los primeros tres; los desgloses diarios muestran hasta los últimos 14
+días con registros del período. Los totales usan todo el período registrado.
+
+Las cifras comienzan al activar esta versión: no reconstruyen actividad anterior
+ni eventos perdidos mientras el bot está desconectado. Las sesiones abiertas al
+arrancar se miden desde ese momento sin inventar una conexión. Guarda agregados
+por servidor, usuario y día cada minuto y al apagarse; una caída abrupta puede
+perder hasta el último intervalo sin guardar. No almacena contenido de mensajes
+ni audio en este registro. Usa un archivo adjunto de estado separado en
+`TARS_STATE_CHANNEL_ID` o `LOG_CHANNEL_ID`, protegido frente a `!borrar`; sin canal
+configurado usa `TARS_DATA_DIR/server-activity.json` (requiere disco persistente).
+Conserva el mensaje «TARS · Actividad del servidor · No borrar». Si falla la lectura,
+no se sobrescribe y TARS avisa que las estadísticas no están disponibles.
+El almacenamiento no tiene purga automática: el historial crece con los días y
+usuarios activos y queda sujeto al límite de adjuntos de Discord.
+
 Con voz habilitada, el registro privado de Discord conserva los límites internos:
 500 intentos de API, 100.000 tokens estimados y 3.600 segundos de audio por 24 horas
 móviles. Se permiten 20 transcripciones y 6 respuestas por minuto, separadamente;

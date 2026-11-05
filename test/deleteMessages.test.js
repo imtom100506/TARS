@@ -22,9 +22,10 @@ test('normal deletion excludes pinned, old and internal state messages', async (
   const f = fixture(); f.rows.get('0').pinned = true;
   f.rows.get('1').createdTimestamp = 0;
   Object.assign(f.rows.get('2'), { author: { id: 'bot' }, content: 'TARS · Presupuesto IA · No borrar' });
+  Object.assign(f.rows.get('3'), { author: { id: 'bot' }, content: 'TARS · Actividad del servidor · No borrar' });
   await deleteMessages(f.ctx, '10', f.options);
   assert.equal(f.deleted[0].length, 10);
-  assert.ok(f.deleted[0].every(id => !['0', '1', '2'].includes(id)));
+  assert.ok(f.deleted[0].every(id => !['0', '1', '2', '3'].includes(id)));
   assert.equal(f.clear, 1); assert.equal(f.logs[0][0], 'borrado');
 });
 test('user filter never deletes another author', async () => {

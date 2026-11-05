@@ -101,6 +101,7 @@ function fixture(overrides = {}) {
   const ctx = { guild, user: { id: 'human' }, channel: { send: async value => replies.push(value.content) }, reply: async value => replies.push(value) };
   const voice = createVoice({ enabled: true, client: { user: { id: 'bot' } }, api,
     wakeFactory: overrides.wakeFactory,
+    getContext: overrides.getContext,
     recordConversation: overrides.recordConversation, sendLog: (event, data) => logs.push({event, ...data}),
     askAI: overrides.askAI || (async () => { throw Error('not expected'); }), decoderFactory: () => new PassThrough(),
     audio: { countdown: overrides.countdown || (async () => Buffer.from('countdown')), check: overrides.check || (async () => {}), synthesize: async () => Buffer.from('wav'), transcribe: overrides.transcribe || (async pcm => { transcriptions++; assert.ok(pcm.length <= MAX_AUDIO_BYTES); return ''; }) },
@@ -120,6 +121,22 @@ test('no background reception and leaves at five minutes', async () => {
   assert.equal(f.subscriptions, 0);
   await f.advance(IDLE_MS - 1); assert.equal(f.destroyed, 0);
   await f.advance(1); assert.equal(f.destroyed, 1);
+});
+
+test('spoken questions receive activity for their own guild and requesting user', async () => {
+  let options;
+  const f = fixture({ transcribe: async () => '¿Cómo va la actividad?',
+    getContext: async (guild, question, userId) => {
+      assert.equal(guild.id, 'guild'); assert.equal(userId, 'human'); assert.match(question, /actividad/);
+      return 'Hoy: 5 participantes en voz.';
+    }, askAI: async (_, __, value) => { options = value; return 'Cinco participantes.'; } });
+  await f.voice.handle(f.ctx, 'entrar');
+  const pending = f.voice.handle(f.ctx, 'escuchar');
+  await new Promise(resolve => setImmediate(resolve));
+  f.capture.end(Buffer.alloc(16000));
+  await pending;
+  assert.equal(options.context, 'Hoy: 5 participantes en voz.');
+  f.voice.leave();
 });
 
 test('explicit invocation resets timer; exit cancels capture without API', async () => {

@@ -121,7 +121,7 @@ function createAI({ systemPrompt, env = process.env, fetchImpl = global.fetch,
       const limit = voice ? (detailed || responseLimit(input) > 600 ? 1500 : 360) : brief ? 600 : responseLimit(input);
       const prompt = voice ? voicePrompt || 'Eres TARS, robot con humor seco. Conserva el idioma del usuario. Responde con 1-2 frases breves; amplía cuando la pregunta necesite explicación. Sin listas, Markdown ni saludos repetidos. Sigue el hilo; aclara solo si hace falta. No ejecutas acciones ni inventas recuerdos.' : systemPrompt;
       const messages = [{ role: 'system', content: `${prompt}\nLímite de esta respuesta: ${limit} caracteres. Termina tus frases dentro de ese espacio.` }, ...(voice ? history.slice(externalHistory ? -6 : -2).map(msg => ({ role: msg.role, content: clip(msg.content, 500) })) : history)];
-      messages.push({ role: 'user', content: context ? `Contexto del servidor:\n${clip(context, 3000)}\n\nPregunta: ${input}` : input });
+      messages.push({ role: 'user', content: context ? `Contexto del servidor:\n${clip(context, 12000)}\n\nPregunta: ${input}` : input });
       let reply;
       try {
         const generated = await generate(messages, voice, signal, onSentence ? { onSentence, limit } : undefined, onProviderFailure);

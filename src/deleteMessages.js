@@ -1,6 +1,7 @@
 const { PermissionFlagsBits } = require('discord.js');
 const { VOICE_ROLES } = require('./botCapabilities');
 const { MARKER } = require('./muteStore');
+const { MARKER: ACTIVITY_MARKER } = require('./serverActivity');
 const active = new Set();
 const pending = new Map();
 const USAGE = 'Usa !borrar 10 o !borrar @usuario 10 (entre 1 y 100).';
@@ -31,7 +32,7 @@ async function deleteMessages(ctx, text, { sendLog = () => {}, clearContext = ()
     const selected = [...messages.values()].sort((a, b) => b.createdTimestamp - a.createdTimestamp)
       .filter(message => message.id !== ctx.messageId && !message.pinned && message.createdTimestamp > oldest &&
         (!request.userId || message.author.id === request.userId) && (!confirmedIds || confirmedIds.has(message.id)) &&
-        !(message.author.id === me.id && [MARKER, 'TARS · Presupuesto IA · No borrar'].includes(message.content)))
+        !(message.author.id === me.id && [MARKER, ACTIVITY_MARKER, 'TARS · Presupuesto IA · No borrar'].includes(message.content)))
       .slice(0, request.count);
     if (!selected.length) return ctx.reply('No encontré mensajes borrables entre los últimos 100. Omito fijados, registros internos y mensajes de 14 días o más.');
     if (request.count > 50 && !confirmedIds) {

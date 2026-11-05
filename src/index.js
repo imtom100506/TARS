@@ -14,6 +14,7 @@ const { createVoice } = require("./voice");
 const { createWakeFactory } = require('./wakeListener');
 const { createVoiceLog } = require('./voiceLog');
 const { deleteMessages, confirmDelete } = require('./deleteMessages');
+const { createServerActivity, MARKER: ACTIVITY_MARKER } = require('./serverActivity');
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages,
@@ -25,6 +26,9 @@ const client = new Client({
   allowedMentions: { parse: [], repliedUser: false },
 });
 const muteStateChannel = process.env.TARS_STATE_CHANNEL_ID || process.env.LOG_CHANNEL_ID;
+const activity = createServerActivity({ store: muteStateChannel ? createDiscordMuteStore(client, muteStateChannel,
+  global.fetch, ACTIVITY_MARKER, 'tars-activity.json') : undefined });
+const activityError = error => console.error('[actividad]', error.message);
 const textMutes = createTextMutes({ store: muteStateChannel ? createDiscordMuteStore(client, muteStateChannel) : undefined });
 const channelContext = new BoundedMap(200);
 const voiceEnabled = process.env.TARS_VOICE_ENABLED === 'true';
@@ -32,10 +36,31 @@ const rate = (key, fallback) => { const value = Number(process.env[key]); return
 const budget = createUsageBudget({ minuteRequests: rate('TARS_LLM_REQUESTS_PER_MINUTE', 6), sttMinuteRequests: rate('TARS_STT_REQUESTS_PER_MINUTE', 20), store: muteStateChannel ? createDiscordMuteStore(client, muteStateChannel,
   global.fetch, 'TARS · Presupuesto IA · No borrar', 'tars-usage.json') : undefined });
 if (voiceEnabled) setBudget(budget);
-const voice = createVoice({ client, askAI, enabled: voiceEnabled, audio: createVoiceAudio({ budget }), wakeFactory: createWakeFactory(), recordConversation: createVoiceLog(client), sendLog });
-client.on('voiceStateUpdate', (oldState, newState) => voice.onVoiceState(oldState, newState));
-process.once('SIGTERM', () => { voice.leave(); client.destroy(); process.exit(0); });
-process.once('SIGINT', () => { voice.leave(); client.destroy(); process.exit(0); });
+const voice = createVoice({ client, askAI, getContext: getActivityContext, enabled: voiceEnabled, audio: createVoiceAudio({ budget }), wakeFactory: createWakeFactory(), recordConversation: createVoiceLog(client), sendLog });
+client.on('voiceStateUpdate', (oldState, newState) => {
+  void activity.voice(oldState, newState).catch(activityError);
+  voice.onVoiceState(oldState, newState);
+});
+async function shutdown() {
+  voice.leave();
+  client.destroy();
+  await activity.flush().catch(activityError);
+  process.exit(0);
+}
+process.once('SIGTERM', shutdown);
+process.once('SIGINT', shutdown);
+client.on('guildMemberAdd', member => { void activity.member(member, true).catch(activityError); });
+client.on('guildMemberRemove', member => { void activity.member(member, false).catch(activityError); });
+client.on('guildCreate', guild => { void activity.sync(guild).catch(activityError); });
+client.on('shardDisconnect', (_, shardId) => {
+  const ids = [...client.guilds.cache.values()].filter(g => g.shardId === shardId).map(g => g.id);
+  void activity.pause(ids).catch(activityError);
+});
+const syncActivityShard = shardId => {
+  for (const guild of client.guilds.cache.values()) if (guild.shardId === shardId) void activity.sync(guild).catch(activityError);
+};
+client.on('shardResume', syncActivityShard);
+client.on('shardReady', syncActivityShard);
 
 async function sendLog(type, data) {
   if (!process.env.LOG_CHANNEL_ID) return;
@@ -69,6 +94,12 @@ const commands = [
 ].map(command => command.toJSON());
 
 client.once("ready", async () => {
+  await activity.start(client.guilds.cache.values()).catch(activityError);
+  const saveActivity = async () => {
+    await activity.flush().catch(activityError);
+    setTimeout(saveActivity, 60000).unref();
+  };
+  setTimeout(saveActivity, 60000).unref();
   console.log(`Bot conectado como: ${client.user.tag}`);
   void sendLog("conexion", { bot: client.user.tag, servidores: client.guilds.cache.size });
   const restoreMutes = async () => {
@@ -109,6 +140,12 @@ function getServerContext(guild) {
     if (member.presence?.status && member.presence.status !== "offline") online++;
   }
   return `Contexto del servidor "${guild.name}": ${members} miembros humanos en caché, ${online} conectados observados.`;
+}
+
+async function getActivityContext(guild, question, requesterId) {
+  if (!guild) return '';
+  try { return await activity.context(guild, question, requesterId); }
+  catch (error) { activityError(error); return 'Estadísticas de actividad no disponibles por un error del registro. No inventes cifras.'; }
 }
 
 async function summarize(ctx, count) {
@@ -189,7 +226,7 @@ async function execute(ctx, command, argument) {
   const serverContext = getServerContext(ctx.guild);
   const recent = channelContext.get(ctx.channel.id) || [];
   const response = await askAI(ctx.user.id, text, {
-    context: `${serverContext}\nUsuario que pregunta: ${ctx.user.username} (${ctx.user.id}).\n\nContexto reciente del canal:\n${recent.join("\n")}`,
+    context: `${serverContext}\n${await getActivityContext(ctx.guild, text, ctx.user.id)}\nUsuario que pregunta: ${ctx.user.username} (${ctx.user.id}).\n\nContexto reciente del canal:\n${recent.join("\n")}`,
   });
   void sendLog("respuesta", { usuario: ctx.user.username, respuesta: response });
   await ctx.reply(response);
@@ -237,6 +274,7 @@ client.on("interactionCreate", async interaction => {
 
 client.on("messageCreate", async message => {
   if (message.author.bot) return;
+  if (message.guild) await activity.message(message).catch(activityError);
   const recent = channelContext.get(message.channel.id) || [];
   channelContext.set(message.channel.id, appendContext(recent, `${message.author.username}: ${message.content}`));
   const match = message.content.trim().match(/^!(tars|reset|ping|ayuda|resumir|usuarios|entrar|escuchar|salir|borrar)(?:\s+([\s\S]*))?$/i);

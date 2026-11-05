@@ -47,6 +47,7 @@ function bot() {
       if (name === "./moderation") return require("../src/moderation");
       if (name === "./textMute") return { createTextMutes: () => ({ mute: async (...args) => muteCalls.push(args) }) };
       if (name === "./muteStore") return require("../src/muteStore");
+      if (name === './serverActivity') return { createServerActivity: () => ({ message: async () => {}, context: async () => 'Actividad de voz: 3 participantes hoy.' }) };
       if (name === "./boundedMap") return require("../src/boundedMap");
       if (["./usageBudget", "./voiceAudio", "./voice", "./wakeListener", "./voiceLog", "./deleteMessages"].includes(name)) return require(`../src/${name.slice(2)}`);
       throw new Error(name);
@@ -82,6 +83,18 @@ test("single login, DM guards, and slash long replies", async () => {
   assert.equal(aiCalls.length, 1);
   assert.equal(request.replies.length, 3);
   assert.equal(request.replies.map(reply => reply.content).join(""), "x".repeat(4200));
+});
+
+test('ordinary slash and prefix questions receive voice activity without a new command', async () => {
+  const { client, aiCalls } = bot();
+  const guild = { id: 'g', name: 'The Goats', members: { cache: new Map() } };
+  await client.listeners('interactionCreate')[0](interaction('tars', '¿Cómo ha ido la actividad del servidor?', guild));
+  await client.listeners('messageCreate')[0]({
+    content: '!tars ¿Quién participa más en voz hoy?', author: { id: '1', username: 'tester' }, guild,
+    channel: { id: '2', sendTyping: async () => {} }, reply: async () => {},
+  });
+  assert.equal(aiCalls.length, 2);
+  for (const call of aiCalls) assert.match(call[2].context, /Actividad de voz: 3 participantes hoy/);
 });
 
 test("slash and prefix reject invalid summaries before fetching messages", async () => {
