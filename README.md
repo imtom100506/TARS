@@ -42,12 +42,28 @@ de canal o de mute no cuentan como otra conexión; se excluyen bots y mensajes p
 No necesita entrar a los canales de voz ni grabar audio para medir presencia.
 
 Las consultas de estadísticas reconocidas se responden directamente desde los
-contadores, sin que la IA reescriba las cifras. Se conservan milisegundos y se
-muestran horas, minutos y segundos sin redondear hacia arriba. Toda respuesta
-indica el inicio del registro y la cobertura parcial. El acumulado entre personas
-no es la duración de una llamada: cuatro personas observadas durante 15 segundos
-suman un minuto de tiempo-persona. Si una sesión ya estaba abierta al arrancar,
-TARS indica que desconoce su inicio real; no atribuye el tramo medido a todo el día.
+contadores, sin que la IA reescriba las cifras. La respuesta habitual es conversacional:
+cuántas personas hay en cada canal ocupado y quién destaca en voz, sin fechas,
+horas, duraciones ni avisos técnicos. Los empates se reconocen, sin inventar un ganador.
+Solo si se pregunta por tiempo se muestran horas, minutos y segundos y se aclara
+que puede faltar actividad anterior. Se conservan milisegundos en los contadores.
+El tiempo sumado entre personas no es la duración de una sola llamada.
+
+TARS también consulta auditoría cuando se pregunta por baneos, expulsiones, mutes,
+ensordecimientos, timeouts o movimientos. Necesita el permiso **Ver registro de
+auditoría** en su rol; el código no puede concedérselo a sí mismo. Usa el intent
+GuildModeration y refresca la API al consultar, porque los movimientos agrupados
+pueden actualizar una entrada sin emitir otro evento. Lee hasta 1.000 entradas
+recientes por consulta, de cualquier tipo, y avisa si alcanzó el límite o falló la
+lectura. Discord conserva su auditoría 45 días. No se prometen períodos anteriores.
+Las consultas muestran hasta ocho coincidencias; no ejecutan moderación.
+
+Las entradas/salidas y cambios de canal normales se registran con eventos de voz.
+Un cambio observado no prueba quién lo causó: solo se atribuye un autor cuando
+consta en auditoría, y no se vinculan movimientos grupales a usuarios por proximidad
+de tiempo. Distingue silencio/ensordecimiento propio de los impuestos por el servidor.
+Los eventos se guardan junto al estado de actividad, hasta 5.000 por servidor y
+45 días. Los contadores diarios existentes se conservan sin esa purga.
 
 Puedes preguntar «¿Cómo ha ido la actividad del servidor?», «¿Quién participa más
 en voz hoy?», «¿Cuántas veces se ha conectado @usuario en el histórico?» o

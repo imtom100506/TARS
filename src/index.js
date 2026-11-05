@@ -16,11 +16,12 @@ const { createVoiceLog } = require('./voiceLog');
 const { deleteMessages, confirmDelete } = require('./deleteMessages');
 const { createServerActivity, MARKER: ACTIVITY_MARKER } = require('./serverActivity');
 const { activityReply } = require('./activityReply');
+const { createServerAudit, auditRequested } = require('./serverAudit');
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent, GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildPresences, GatewayIntentBits.GuildVoiceStates],
+    GatewayIntentBits.GuildMembers, GatewayIntentBits.GuildPresences, GatewayIntentBits.GuildVoiceStates, GatewayIntentBits.GuildModeration],
   partials: [Partials.Channel],
   ws: { large_threshold: 50 },
   rest: { timeout: 60000 },
@@ -30,6 +31,13 @@ const muteStateChannel = process.env.TARS_STATE_CHANNEL_ID || process.env.LOG_CH
 const activity = createServerActivity({ store: muteStateChannel ? createDiscordMuteStore(client, muteStateChannel,
   global.fetch, ACTIVITY_MARKER, 'tars-activity.json') : undefined });
 const activityError = error => console.error('[actividad]', error.message);
+const audit = createServerAudit({ activity });
+async function getAuditReply(guild, question, options) {
+  if (!auditRequested(question)) return null;
+  try { return await audit.reply(guild, question, options); }
+  catch (error) { activityError(error); return 'Ahora no puedo consultar ese registro. Prueba de nuevo en un rato.'; }
+}
+client.on('guildAuditLogEntryCreate', (entry, guild) => { void audit.record(entry, guild).catch(activityError); });
 const textMutes = createTextMutes({ store: muteStateChannel ? createDiscordMuteStore(client, muteStateChannel) : undefined });
 const channelContext = new BoundedMap(200);
 const voiceEnabled = process.env.TARS_VOICE_ENABLED === 'true';
@@ -37,8 +45,9 @@ const rate = (key, fallback) => { const value = Number(process.env[key]); return
 const budget = createUsageBudget({ minuteRequests: rate('TARS_LLM_REQUESTS_PER_MINUTE', 6), sttMinuteRequests: rate('TARS_STT_REQUESTS_PER_MINUTE', 20), store: muteStateChannel ? createDiscordMuteStore(client, muteStateChannel,
   global.fetch, 'TARS · Presupuesto IA · No borrar', 'tars-usage.json') : undefined });
 if (voiceEnabled) setBudget(budget);
-const voice = createVoice({ client, askAI, getContext: getActivityContext, enabled: voiceEnabled, audio: createVoiceAudio({ budget }), wakeFactory: createWakeFactory(), recordConversation: createVoiceLog(client), sendLog });
+const voice = createVoice({ client, askAI, getContext: getActivityContext, getAuditReply, enabled: voiceEnabled, audio: createVoiceAudio({ budget }), wakeFactory: createWakeFactory(), recordConversation: createVoiceLog(client), sendLog });
 client.on('voiceStateUpdate', (oldState, newState) => {
+  void audit.voice(oldState, newState).catch(activityError);
   void activity.voice(oldState, newState).catch(activityError);
   voice.onVoiceState(oldState, newState);
 });
@@ -195,12 +204,13 @@ async function execute(ctx, command, argument) {
     return ctx.reply("Historial borrado. Empezamos de cero.");
   }
   const text = String(argument ?? "").trim();
+  if (command === 'tars' && auditRequested(text)) return ctx.reply(await getAuditReply(ctx.guild, text));
   if (command === 'borrar') return deleteMessages(ctx, text, { sendLog, clearContext: id => channelContext.delete(id) });
   const moderation = command === "tars" ? parseModeration(text) : null;
   if (moderation) return moderate(ctx, moderation, sendLog, textMutes);
   const directReply = command === "tars" ? commandReply(text) : null;
   if (directReply) return ctx.reply(directReply);
-  const isKick = command === "tars" && /\b(kick|expulsa|saca|bota|desconecta)\b/i.test(text);
+  const isKick = command === "tars" && /^(?:tars[, ]+)?(?:por favor[, ]+)?(kick|expulsa|saca|bota|desconecta)\b/i.test(text);
   const isSummary = command === "resumir" || (command === "tars" && /\bresum(?:e|ir)\b/i.test(text));
   if (!ctx.guild && (command === "usuarios" || isKick || isSummary)) {
     return ctx.reply("Este comando solo está disponible dentro de un servidor.");

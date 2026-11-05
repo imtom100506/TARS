@@ -6,7 +6,7 @@ const FOLLOWUP_MS = 8000;
 const MAX_AUDIO_BYTES = 12 * 32000;
 
 const { activityReply } = require('./activityReply');
-function createVoice({ client, askAI, audio, getContext = async () => '', recordConversation = () => {}, sendLog = () => {}, enabled = false, api, decoderFactory, wakeFactory = null, now = Date.now,
+function createVoice({ client, askAI, audio, getContext = async () => '', getAuditReply = async () => null, recordConversation = () => {}, sendLog = () => {}, enabled = false, api, decoderFactory, wakeFactory = null, now = Date.now,
   setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   let session, joining = false;
   const load = () => {
@@ -153,7 +153,7 @@ function createVoice({ client, askAI, audio, getContext = async () => '', record
       if (followup) { s.lastCall = now(); schedule(s); }
       recordConversation({ guildId: s.voiceChannel.guild.id, channelId: s.voiceChannel.id, userId, role: 'user', text: question });
       const context = await getContext(s.voiceChannel.guild, question, userId);
-      const reply = activityReply(context, question, userId, { voice: true }) || await askAI(userId, question, { voice: true, signal, context });
+      const reply = await getAuditReply(s.voiceChannel.guild, question, { voice: true }) || activityReply(context, question, userId, { voice: true }) || await askAI(userId, question, { voice: true, signal, context });
       signal.throwIfAborted();
       mark('respuesta_ms');
       if (s.closed) return;

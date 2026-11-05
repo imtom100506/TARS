@@ -152,7 +152,7 @@ test('spoken activity report preserves measured facts without invoking the model
   const pending = f.voice.handle(f.ctx, 'escuchar');
   await new Promise(resolve => setImmediate(resolve));
   f.capture.end(Buffer.alloc(16000)); await pending;
-  assert.match(records.find(row => row.role === 'assistant').text, /Registro parcial desde/);
+  assert.match(records.find(row => row.role === 'assistant').text, /Ahora mismo no hay nadie/);
   f.voice.leave();
 });
 

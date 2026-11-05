@@ -48,6 +48,8 @@ function bot(activityContext = 'Actividad de voz: 3 participantes hoy.') {
       if (name === "./textMute") return { createTextMutes: () => ({ mute: async (...args) => muteCalls.push(args) }) };
       if (name === "./muteStore") return require("../src/muteStore");
       if (name === './activityReply') return require('../src/activityReply');
+      if (name === './serverAudit') return { auditRequested: require('../src/serverAudit').auditRequested,
+        createServerAudit: () => ({ reply: async () => 'Consulta de auditoría; sin acciones.' }) };
       if (name === './serverActivity') return { createServerActivity: () => ({ message: async () => {}, context: async () => activityContext }) };
       if (name === "./boundedMap") return require("../src/boundedMap");
       if (["./usageBudget", "./voiceAudio", "./voice", "./wakeListener", "./voiceLog", "./deleteMessages"].includes(name)) return require(`../src/${name.slice(2)}`);
@@ -98,7 +100,7 @@ test('ordinary slash and prefix questions receive voice activity without a new c
   for (const call of aiCalls) assert.match(call[2].context, /Actividad de voz: 3 participantes hoy/);
 });
 
-test('slash and prefix activity metrics bypass LLM rewriting and retain the partial coverage warning', async () => {
+test('slash and prefix activity metrics stay conversational and bypass LLM rewriting', async () => {
   const { createServerActivity } = require('../src/serverActivity');
   const guild = { id: 'g', name: 'The Goats', members: { cache: new Map() }, voiceStates: { cache: new Map() } };
   const tracker = createServerActivity({ store: { read: async () => null, write: async () => {} }, now: () => Date.parse('2026-11-05T21:18:00Z') });
@@ -112,8 +114,21 @@ test('slash and prefix activity metrics bypass LLM rewriting and retain the part
     channel: { id: '2', sendTyping: async () => {} }, reply: async payload => replies.push(payload),
   });
   assert.equal(aiCalls.length, 0);
-  assert.match(request.replies[0].content, /Registro parcial desde/);
-  assert.match(replies[0].content, /Registro parcial desde/);
+  assert.match(request.replies[0].content, /Ahora mismo no hay nadie/);
+  assert.match(replies[0].content, /Ahora mismo no hay nadie/);
+  assert.doesNotMatch(replies[0].content, /Registro parcial|2026/);
+});
+
+test('audit questions including kick or resume never execute moderation or fetch channel messages', async () => {
+  const { client, aiCalls, muteCalls } = bot();
+  const guild = { id: 'g' };
+  for (const text of ['quién hizo kick a <@123>', 'resume la auditoría', 'quién muteó a <@123>', 'quién movió a <@123>']) {
+    const request = interaction('tars', text, guild);
+    await client.listeners('interactionCreate')[0](request);
+    assert.match(request.replies[0].content, /Consulta de auditoría/);
+  }
+  assert.equal(aiCalls.length, 0);
+  assert.equal(muteCalls.length, 0);
 });
 
 test("slash and prefix reject invalid summaries before fetching messages", async () => {

@@ -1,5 +1,6 @@
 // Metric answers are rendered from counters, not rewritten or rounded by an LLM.
 const normalize = text => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const { naturalActivity } = require('./naturalActivity');
 function duration(ms) {
   if (ms > 0 && ms < 1000) return 'menos de 1 s';
   const seconds = Math.floor(ms / 1000);
@@ -18,10 +19,13 @@ function activityReply(context, question, requesterId, { voice = false } = {}) {
   catch { return null; }
   if (!data.cobertura || !data.hoy) return null;
   const stats = data.periodoConsultado || data.hoy;
+  if (!/tiempo|duracion|horas?|minutos?|segundos?|cuanto llev|por dia|al dia|diari/.test(q)) {
+    return naturalActivity(data, q, requesterId, voice);
+  }
   const timestamp = new Intl.DateTimeFormat('es-CL', { timeZone: 'America/Santiago',
     year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
   const since = timestamp.format(new Date(data.cobertura.registroDesde));
-  const coverage = `Registro parcial desde ${since} (Chile); no incluye tiempo anterior ni desconexiones del bot.`;
+  const coverage = 'Esto es lo que he visto; puede faltar actividad anterior.';
   const unknown = data.cobertura.sesionesActualesConInicioDesconocido;
   const start = unknown ? ` ${unknown} sesiones actuales ya estaban abiertas al observarlas: su duración real es desconocida.` : '';
   const range = stats.desde === stats.hasta ? stats.desde : `${stats.desde} a ${stats.hasta}`;
@@ -51,12 +55,12 @@ function activityReply(context, question, requesterId, { voice = false } = {}) {
   }
   if (voice) {
     const compact = `${data.ahoraEnVoz} en voz ahora; ${duration(stats.vozMs)} registrados sumando personas, ${stats.conexiones} conexiones, ${stats.mensajes} mensajes.`;
-    const prefix = `Registro parcial desde ${since}. ${data.periodoConsultado ? `Período ${range}. ` : ''}`;
+    const prefix = 'Por lo que he registrado: ';
     const suffix = unknown ? ' Inicio real de sesiones previas desconocido.' : '';
     const response = `${prefix}${spokenDetail || compact}${suffix}`;
     // The speech pipeline accepts 280 characters: never cut a figure or the coverage warning.
     return response.length <= 280 ? response : `${prefix}${compact}${suffix}`;
   }
-  return `${coverage}${start}\n${range}: ${detail}`;
+  return `${detail} ${coverage}`;
 }
 module.exports = { activityReply, duration };

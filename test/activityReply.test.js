@@ -6,7 +6,7 @@ const { activityReply, duration } = require('../src/activityReply');
 async function scenario() {
   let time = Date.parse('2026-11-05T21:18:00Z'), saved;
   const members = new Map(['1', '2', '3', '4'].map(id => [id, { displayName: `Persona ${id}`, user: { username: `user${id}`, bot: false } }]));
-  const guild = { id: 'g', members: { cache: members }, voiceStates: { cache: new Map() } };
+  const guild = { id: 'g', members: { cache: members }, channels: { cache: new Map([['voice', { name: 'Charla Chill 1' }], ['other', { name: 'Charla Chill 2' }]]) }, voiceStates: { cache: new Map() } };
   const state = (id, channelId) => ({ id, channelId, guild, member: members.get(id) });
   for (const id of members.keys()) guild.voiceStates.cache.set(id, state(id, 'voice'));
   const store = { read: async () => saved, write: async s => { saved = s; } };
@@ -29,17 +29,15 @@ test('screenshot regression: four existing sessions with 15 seconds each are par
   assert.equal(data.hoy.conexiones, 0);
   assert.equal(data.cobertura.sesionesActualesConInicioDesconocido, 4);
   const reply = activityReply(context, question, '1');
-  assert.match(reply, /Registro parcial desde 05-11-2026, 18:18:00/);
-  assert.match(reply, /4 sesiones actuales.*duración real es desconocida/);
-  assert.match(reply, /1 min acumulados entre todos/);
-  assert.match(reply, /no duración de la llamada/);
-  assert.match(reply, /2 mensajes de 1 autor/);
-  assert.doesNotMatch(reply, /sin mensajes|0 min|No hubo conexiones/);
+  assert.match(reply, /Hay 4 personas en Charla Chill 1/);
+  assert.match(reply, /empatados/);
+  assert.match(reply, /Persona 1 también ha estado participando/);
+  assert.doesNotMatch(reply, /Registro parcial|2026|18:18| min|desconocid|tiempo-persona|Charla Chill 2/);
   const spoken = activityReply(context, question, '1', { voice: true });
   assert.ok(spoken.length <= 280);
-  assert.match(spoken, /1 min registrados sumando personas/);
-  assert.match(spoken, /Inicio real de sesiones previas desconocido/);
-  assert.match(activityReply(await f.context('Quién está más activo en voz hoy'), 'Quién está más activo en voz hoy'), /Persona 1: 15 s/);
+  assert.match(spoken, /Hay 4 personas en Charla Chill 1/);
+  assert.doesNotMatch(spoken, / min|registro parcial/i);
+  assert.match(activityReply(await f.context('Quién está más activo en voz hoy'), 'Quién está más activo en voz hoy'), /empatados/);
 });
 
 test('rankings use the requested metric and detect genuine ties without inventing a text tie', async () => {
@@ -47,9 +45,42 @@ test('rankings use the requested metric and detect genuine ties without inventin
   await f.tracker.message({ guild: f.guild, author: { id: '2' } });
   const voice = activityReply(await f.context('top voz hoy'), 'top voz hoy');
   const text = activityReply(await f.context('quién escribió más mensajes hoy'), 'quién escribió más mensajes hoy');
-  assert.match(voice, /Hay empate/);
-  assert.match(text, /Persona 2: 1 mensajes/);
+  assert.match(voice, /empatados/);
+  assert.match(text, /Persona 2 es quien más ha escrito/);
   assert.doesNotMatch(text, /empate/);
+});
+
+test('18:26 request lists occupied channels and a genuine leader without dates, durations or boilerplate', async () => {
+  const f = await scenario();
+  f.advance(1000);
+  for (const id of ['2', '3', '4']) await f.tracker.voice(f.state(id, 'voice'), f.state(id, null));
+  f.advance(1000);
+  for (const id of ['2', '3', '4', '5', '6', '7']) {
+    if (!f.guild.members.cache.has(id)) f.guild.members.cache.set(id, { displayName: `Persona ${id}`, user: { bot: false } });
+    const channel = ['6', '7'].includes(id) ? 'other' : 'voice';
+    const state = f.state(id, channel);
+    f.guild.voiceStates.cache.set(id, state);
+    await f.tracker.voice(f.state(id, null), state);
+  }
+  f.advance(1000);
+  const q = 'Hola, buenas tardes. Como va la actividad del server?';
+  const reply = activityReply(await f.context(q), q, '1');
+  assert.match(reply, /Hay 5 personas en Charla Chill 1/);
+  assert.match(reply, /Hay 2 personas en Charla Chill 2/);
+  assert.match(reply, /Persona 1 es quien más ha estado en voz/);
+  assert.doesNotMatch(reply, /Registro|2026|parcial|minuto| min|sesiones|desconocido|período|tiempo-persona/);
+});
+
+test('occupancy uses all current states, not the ten-member preview, and excludes bots', async () => {
+  const f = await scenario();
+  for (let id = 5; id <= 13; id++) {
+    f.guild.members.cache.set(String(id), { user: { bot: id === 13 } });
+    f.guild.voiceStates.cache.set(String(id), f.state(String(id), 'voice'));
+  }
+  const data = JSON.parse((await f.context('actividad')).split('\n').at(-1));
+  assert.equal(data.ahoraEnVoz, 12);
+  assert.equal(data.canalesVoz[0].personas, 12);
+  assert.equal(data.participantesActualesPrimeros10.length, 10);
 });
 
 test('long running sessions accrue beyond startup and current-call origin survives moves', async () => {
@@ -72,7 +103,7 @@ test('restart keeps previous totals but never fabricates time while offline or a
   const data = JSON.parse(context.split('\n').at(-1));
   assert.equal(data.hoy.vozMs, 120000);
   assert.equal(data.cobertura.sesionesActualesConInicioDesconocido, 4);
-  assert.match(activityReply(context, 'actividad'), /no incluye tiempo anterior ni desconexiones/);
+  assert.match(activityReply(context, 'actividad'), /Hay 4 personas en Charla Chill 1/);
 });
 
 test('new observed connection has known origin, precise individual duration and no startup warning', async () => {
