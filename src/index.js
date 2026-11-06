@@ -2,9 +2,16 @@ require("dotenv").config();
 const { Client, GatewayIntentBits, Partials, REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
 const { askAI, clearHistory, setBudget } = require("./ai");
 const keepAlive = require("./keepAlive");
-const { summaryCount, countFromText, mentionedUserId, splitResponse, appendContext } = require("./commandUtils");
-const { BoundedMap } = require("./boundedMap");
-const { VOICE_ROLES: ROLES_AUTORIZADOS, HELP, commandReply } = require("./botCapabilities");
+const { summaryCount, countFromText, splitResponse } = require("./commandUtils");
+const path = require('node:path');
+const { conversationScope } = require('./conversationScope');
+const { createOperationalLog } = require('./operationalLog');
+const { createFileStore } = require('./fileStore');
+const { createRecentContext } = require('./recentContext');
+const { createRequestLimits } = require('./requestLimits');
+const { activityVisibility } = require('./accessPolicy');
+const { disconnectMember } = require('./disconnectMember');
+const { HELP, commandReply } = require("./botCapabilities");
 const { parseModeration, moderate } = require("./moderation");
 const { createTextMutes } = require("./textMute");
 const { createDiscordMuteStore } = require("./muteStore");
@@ -28,10 +35,13 @@ const client = new Client({
   rest: { timeout: 60000 },
   allowedMentions: { parse: [], repliedUser: false },
 });
+const sendLog = createOperationalLog(client);
+const health = { activity: 0, mutes: 0, budget: 0 };
+const allowRequest = createRequestLimits();
 const muteStateChannel = process.env.TARS_STATE_CHANNEL_ID || process.env.LOG_CHANNEL_ID;
 const activity = createServerActivity({ store: muteStateChannel ? createDiscordMuteStore(client, muteStateChannel,
   global.fetch, ACTIVITY_MARKER, 'tars-activity.json') : undefined });
-const activityError = error => console.error('[actividad]', error.message);
+const activityError = error => { health.activity = 0; console.error('[actividad]', error.message); };
 const audit = createServerAudit({ activity });
 async function getAuditReply(guild, question, options) {
   if (!auditRequested(question)) return null;
@@ -40,12 +50,12 @@ async function getAuditReply(guild, question, options) {
 }
 client.on('guildAuditLogEntryCreate', (entry, guild) => { void audit.record(entry, guild).catch(activityError); });
 const textMutes = createTextMutes({ store: muteStateChannel ? createDiscordMuteStore(client, muteStateChannel) : undefined });
-const channelContext = new BoundedMap(200);
+const channelContext = createRecentContext();
 const voiceEnabled = process.env.TARS_VOICE_ENABLED === 'true';
 const rate = (key, fallback) => { const value = Number(process.env[key]); return Number.isInteger(value) && value > 0 && value <= 60 ? value : fallback; };
 const budget = createUsageBudget({ minuteRequests: rate('TARS_LLM_REQUESTS_PER_MINUTE', 6), sttMinuteRequests: rate('TARS_STT_REQUESTS_PER_MINUTE', 20), store: muteStateChannel ? createDiscordMuteStore(client, muteStateChannel,
-  global.fetch, 'TARS · Presupuesto IA · No borrar', 'tars-usage.json') : undefined });
-if (voiceEnabled) setBudget(budget);
+  global.fetch, 'TARS · Presupuesto IA · No borrar', 'tars-usage.json') : createFileStore(path.join(process.env.TARS_DATA_DIR || path.join(__dirname, '..', 'data'), 'usage.json')) });
+setBudget(budget);
 const voice = createVoice({ client, askAI, getContext: getActivityContext, getAuditReply, enabled: voiceEnabled, audio: createVoiceAudio({ budget }), wakeFactory: createWakeFactory(), recordConversation: createVoiceLog(client), sendLog });
 client.on('voiceStateUpdate', (oldState, newState) => {
   void audit.voice(oldState, newState).catch(activityError);
@@ -73,19 +83,6 @@ const syncActivityShard = shardId => {
 client.on('shardResume', syncActivityShard);
 client.on('shardReady', syncActivityShard);
 
-async function sendLog(type, data) {
-  if (!process.env.LOG_CHANNEL_ID) return;
-  try {
-    const channel = await client.channels.fetch(process.env.LOG_CHANNEL_ID);
-    if (!channel?.isTextBased() || typeof channel.send !== "function") return;
-    const timestamp = new Date().toLocaleString("es-CL", { timeZone: "America/Santiago" });
-    const details = Object.entries(data).map(([key, value]) => `${key}: ${String(value).slice(0, 400)}`).join("\n");
-    await channel.send({ content: `[${timestamp}] **${type.toUpperCase()}**\n${details}`.slice(0, 1900), allowedMentions: { parse: [] } });
-  } catch (error) {
-    console.error("Error enviando log:", error.message);
-  }
-}
-
 const commands = [
   ...['entrar', 'escuchar', 'salir'].map(name => new SlashCommandBuilder().setName(name)
     .setDescription({ entrar: 'Invita a TARS a tu canal de voz', escuchar: 'Activa una pregunta de voz de hasta 12 segundos', salir: 'Desconecta a TARS de tu canal de voz' }[name])),
@@ -105,22 +102,28 @@ const commands = [
 ].map(command => command.toJSON());
 
 client.once("ready", async () => {
-  await activity.start(client.guilds.cache.values()).catch(activityError);
+  await activity.start(client.guilds.cache.values()).then(() => { health.activity = Date.now(); }).catch(activityError);
   const saveActivity = async () => {
-    await activity.flush().catch(activityError);
+    await activity.flush().then(() => { health.activity = Date.now(); }).catch(activityError);
     setTimeout(saveActivity, 60000).unref();
   };
   setTimeout(saveActivity, 60000).unref();
   console.log(`Bot conectado como: ${client.user.tag}`);
   void sendLog("conexion", { bot: client.user.tag, servidores: client.guilds.cache.size });
   const restoreMutes = async () => {
-    try { await textMutes.sweep(client, sendLog); }
-    catch (error) { console.error("No se pudo recuperar el registro de mutes de texto:", error.message); }
+    try { health.mutes = await textMutes.sweep(client, sendLog) ? Date.now() : 0; }
+    catch (error) { health.mutes = 0; console.error("No se pudo recuperar el registro de mutes de texto:", error.message); }
   };
+  const checkBudget = async () => {
+    try { await budget.check(); health.budget = Date.now(); }
+    catch { health.budget = 0; console.error('[cuota] Almacenamiento no disponible.'); }
+    setTimeout(checkBudget, 60000).unref();
+  };
+  await checkBudget();
   await restoreMutes();
   for (const guild of client.guilds.cache.values()) {
     try { await textMutes.syncGuild(guild); }
-    catch (error) { void sendLog("mute_texto_error", { servidor_id: guild.id, error: error.message }); }
+    catch (error) { health.mutes = 0; void sendLog("mute_texto_error", { servidor_id: guild.id, error: error.message }); }
   }
   // Evitar acumular revisiones si Discord tarda en responder.
   const reviewMutes = async () => {
@@ -153,10 +156,13 @@ function getServerContext(guild) {
   return `Contexto del servidor "${guild.name}": ${members} miembros humanos en caché, ${online} conectados observados.`;
 }
 
-async function getActivityContext(guild, question, requesterId) {
+async function getActivityContext(guild, question, requesterId, responseChannelId) {
   if (!guild || !isActivityQuestion(question)) return '';
-  try { return await activity.context(guild, question, requesterId); }
-  catch (error) { activityError(error); return 'Estadísticas de actividad no disponibles por un error del registro. No inventes cifras.'; }
+  try {
+    const canViewChannel = await activityVisibility(guild, requesterId, responseChannelId);
+    return await activity.context(guild, question, requesterId, { canViewChannel });
+  }
+  catch (error) { if (error.code === 'ACTIVITY_PERIOD') throw error; activityError(error); return 'Estadísticas de actividad no disponibles por un error del registro. No inventes cifras.'; }
 }
 
 async function summarize(ctx, count) {
@@ -165,34 +171,8 @@ async function summarize(ctx, count) {
   const history = selected.map(message => `${message.author.username}: ${message.content}`).join("\n");
   if (!history) return ctx.reply("No hay mensajes para resumir.");
   void sendLog("resumir", { usuario: ctx.user.username, canal: ctx.channel.name, cantidad: selected.length });
-  const response = await askAI(ctx.user.id, `Resume estos mensajes del chat de Discord de forma breve y clara:\n\n${history}`, { brief: true });
+  const response = await askAI(ctx.user.id, `Resume estos mensajes del chat de Discord de forma breve y clara:\n\n${history}`, { brief: true, conversationId: conversationScope({ guildId: ctx.guild?.id, channelId: ctx.channel.id, userId: ctx.user.id }) });
   await ctx.reply(`**Resumen de ${selected.length} mensajes:**\n${response}`);
-}
-
-async function disconnect(ctx, text) {
-  const member = await ctx.guild.members.fetch(ctx.user.id);
-  if (!member.roles.cache.some(role => ROLES_AUTORIZADOS.includes(role.name))) {
-    void sendLog("kick_denegado", { usuario: ctx.user.username });
-    return ctx.reply("Negativo. No tienes rango suficiente para ordenarme eso.");
-  }
-  const targetId = mentionedUserId(text);
-  if (!targetId) return ctx.reply("Menciona exactamente a un usuario. Ej: `!tars saca a @usuario del canal de voz`");
-  const target = await ctx.guild.members.fetch(targetId).catch(error => {
-    if (error.code === 10007) return null;
-    throw error;
-  });
-  if (!target) return ctx.reply("No encontré a ese usuario en el servidor.");
-  if (!target.voice.channelId) return ctx.reply(`${target.user.username} no está en ningún canal de voz.`);
-  const voiceChannel = target.voice.channel?.name || target.voice.channelId;
-  try {
-    await target.voice.disconnect(`Solicitado por ${ctx.user.username} (${ctx.user.id})`);
-  } catch (error) {
-    console.error("Error desconectando de voz:", error.message);
-    void sendLog("error", { comando: "kick", usuario: ctx.user.username, error: error.message });
-    return ctx.reply("Error en la operación. Verifica que tengo el permiso 'Mover miembros'.");
-  }
-  void sendLog("kick", { ejecutor: ctx.user.username, objetivo: target.user.username, canal: voiceChannel });
-  await ctx.reply(`Ejecutando comando. ${target.user.username} expulsado del canal de voz. Misión completada.`);
 }
 
 async function execute(ctx, command, argument) {
@@ -201,11 +181,12 @@ async function execute(ctx, command, argument) {
   if (command === "ayuda") return ctx.reply(HELP);
   if (command === "reset") {
     clearHistory(ctx.user.id);
+    channelContext.clearUser(ctx.user.id);
     void sendLog("reset", { usuario: ctx.user.username });
     return ctx.reply("Historial borrado. Empezamos de cero.");
   }
   const text = String(argument ?? "").trim();
-  if (command === 'tars' && auditRequested(text)) return ctx.reply(await getAuditReply(ctx.guild, text));
+  if (command === 'tars' && auditRequested(text)) return (ctx.privateReply || ctx.reply)(await getAuditReply(ctx.guild, text, { requesterId: ctx.user.id, channelId: ctx.channel.id }));
   if (command === 'borrar') return deleteMessages(ctx, text, { sendLog, clearContext: id => channelContext.delete(id) });
   const moderation = command === "tars" ? parseModeration(text) : null;
   if (moderation) return moderate(ctx, moderation, sendLog, textMutes);
@@ -226,8 +207,9 @@ async function execute(ctx, command, argument) {
     return ctx.reply(`**${role ? `Usuarios con el rol "${role.name}"` : "Usuarios conectados ahora"}:**\n` +
       (members.map(member => `- ${member.user.username}`).join("\n") || "Ninguno"));
   }
-  if (isKick) return disconnect(ctx, text);
+  if (isKick) return disconnectMember(ctx, text, sendLog);
   if (isSummary) {
+    if (!allowRequest(ctx.user.id, ctx.guild?.id)) return ctx.reply('Dame un momento antes de hacer otra consulta.');
     let count;
     try { count = command === "resumir" ? summaryCount(argument) : countFromText(text); }
     catch (error) { return ctx.reply(error.message); }
@@ -237,8 +219,10 @@ async function execute(ctx, command, argument) {
   void sendLog("mensaje", { usuario: ctx.user.username, canal: ctx.channel.name || "privado", mensaje: text });
   const serverContext = isActivityQuestion(text) ? getServerContext(ctx.guild) : '';
   const recent = channelContext.get(ctx.channel.id) || [];
-  const activityContext = await getActivityContext(ctx.guild, text, ctx.user.id);
+  if (!allowRequest(ctx.user.id, ctx.guild?.id)) return ctx.reply('Dame un momento antes de hacer otra consulta.');
+  const activityContext = await getActivityContext(ctx.guild, text, ctx.user.id, ctx.channel.id);
   const response = activityReply(activityContext, text, ctx.user.id) || await askAI(ctx.user.id, text, {
+    conversationId: conversationScope({ guildId: ctx.guild?.id, channelId: ctx.channel.id, userId: ctx.user.id }),
     context: `${serverContext}\n${activityContext}\nUsuario que pregunta: ${ctx.user.username} (${ctx.user.id}).\n\nContexto reciente del canal:\n${recent.join("\n")}`,
   });
   void sendLog("respuesta", { usuario: ctx.user.username, respuesta: response });
@@ -249,7 +233,7 @@ async function handleError(ctx, error) {
   console.error("Error ejecutando comando:", error.message);
   void sendLog("error", { usuario: ctx.user.username, error: error.cause?.message || error.message || String(error) });
   if (error.code === 10062 || error.code === 10015) return;
-  const response = error.code === 'AI_BUDGET' ? error.message : error.code === "AI_UNAVAILABLE"
+  const response = ['AI_BUDGET', 'ACTIVITY_PERIOD', 'AI_RESET'].includes(error.code) ? error.message : error.code === "AI_UNAVAILABLE"
     ? "Los proveedores de IA están saturados o alcanzaron su cuota gratuita. Prueba de nuevo más tarde."
     : error.code === "AI_BUSY"
     ? "Tengo varias consultas pendientes. Prueba de nuevo en un momento."
@@ -263,19 +247,22 @@ async function handleError(ctx, error) {
 client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand() || !interaction.isRepliable()) return;
   if (!commands.some(command => command.name === interaction.commandName)) return;
+  const ephemeral = ["reset", "ayuda"].includes(interaction.commandName) ||
+    interaction.commandName === 'tars' && auditRequested(interaction.options.getString('mensaje') || '');
   const ctx = {
     user: interaction.user, guild: interaction.guild, channel: interaction.channel, messageId: interaction.id,
     reply: async text => {
       for (const chunk of splitResponse(text)) {
-        const payload = { content: chunk, allowedMentions: { parse: [], repliedUser: false } };
+        const payload = { content: chunk, ...(ephemeral ? { flags: 64 } : {}), allowedMentions: { parse: [], repliedUser: false } };
         if (interaction.replied) await interaction.followUp(payload);
         else if (interaction.deferred) await interaction.editReply(payload);
         else await interaction.reply(payload);
       }
     },
   };
+  return sendLog.withContext(ctx, async () => {
   try {
-    await interaction.deferReply(["reset", "ayuda"].includes(interaction.commandName) ? { flags: 64 } : {});
+    await interaction.deferReply(ephemeral ? { flags: 64 } : {});
     void sendLog("slash", { usuario: ctx.user.username, comando: interaction.commandName, canal: ctx.channel?.name || "privado" });
     const argument = interaction.commandName === 'borrar' ? `${interaction.options.getUser('usuario') ? `<@${interaction.options.getUser('usuario').id}> ` : ''}${interaction.options.getInteger('cantidad')}` :
       interaction.commandName === "resumir" ? interaction.options.getInteger("cantidad") :
@@ -283,13 +270,13 @@ client.on("interactionCreate", async interaction => {
       interaction.commandName === "tars" ? interaction.options.getString("mensaje") : null;
     await execute(ctx, interaction.commandName, argument);
   } catch (error) { await handleError(ctx, error); }
+  });
 });
 
 client.on("messageCreate", async message => {
   if (message.author.bot) return;
   if (message.guild) await activity.message(message).catch(activityError);
-  const recent = channelContext.get(message.channel.id) || [];
-  channelContext.set(message.channel.id, appendContext(recent, `${message.author.username}: ${message.content}`));
+  channelContext.add(message.channel.id, message.author.id, `${message.author.username}: ${message.content}`);
   const match = message.content.trim().match(/^!(tars|reset|ping|ayuda|resumir|usuarios|entrar|escuchar|salir|borrar)(?:\s+([\s\S]*))?$/i);
   const ctx = {
     user: message.author, guild: message.guild, channel: message.channel, messageId: message.id,
@@ -299,12 +286,20 @@ client.on("messageCreate", async message => {
       }
     },
   };
+  ctx.privateReply = async text => {
+    if (!ctx.guild) return ctx.reply(text);
+    try {
+      for (const chunk of splitResponse(text)) await message.author.send({ content: chunk, allowedMentions: { parse: [] } });
+    } catch { return ctx.reply('No pude enviarte la consulta en privado. Activa tus mensajes directos o usa /tars.'); }
+  };
+  return sendLog.withContext(ctx, async () => {
   try {
     if (await confirmDelete(ctx, message.content, { sendLog, clearContext: id => channelContext.delete(id) })) return;
     if (!match) return;
     if (["tars", "resumir", "usuarios"].includes(match[1].toLowerCase())) await message.channel.sendTyping();
     await execute(ctx, match[1].toLowerCase(), match[2]);
   } catch (error) { await handleError(ctx, error); }
+  });
 });
 
 process.on("unhandledRejection", error => {
@@ -316,7 +311,7 @@ client.on("error", error => {
   void sendLog("error_fatal", { error: error.message });
 });
 
-keepAlive();
+keepAlive(undefined, { ready: () => client.isReady() && Date.now() - health.activity < 120000 && Date.now() - health.mutes < 15000 && Date.now() - health.budget < 120000 });
 client.login(process.env.DISCORD_TOKEN).catch(error => {
   console.error("Error al conectar con Discord:", error.message);
   process.exit(1);

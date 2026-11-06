@@ -4,14 +4,17 @@
   "description": "TARS: asistente y moderación para Discord",
   "main": "src/index.js",
   "scripts": {
+    "prestart": "node scripts/check-runtime.js",
     "start": "node src/index.js",
+    "check": "node scripts/check.js",
+    "test:coverage": "node --test --experimental-test-coverage",
     "test": "node --test",
     "models:download": "node scripts/download-models.js"
   },
   "license": "ISC",
   "type": "commonjs",
   "engines": {
-    "node": ">=24"
+    "node": ">=24.22.2 <25"
   },
   "dependencies": {
     "@discordjs/voice": "^0.19.2",

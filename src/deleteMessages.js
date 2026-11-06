@@ -1,5 +1,5 @@
 const { PermissionFlagsBits } = require('discord.js');
-const { VOICE_ROLES } = require('./botCapabilities');
+const { hasModeratorRole } = require('./accessPolicy');
 const { MARKER } = require('./muteStore');
 const { MARKER: ACTIVITY_MARKER } = require('./serverActivity');
 const active = new Set();
@@ -22,7 +22,7 @@ async function deleteMessages(ctx, text, { sendLog = () => {}, clearContext = ()
   active.add(ctx.channel.id);
   try {
     const actor = await ctx.guild.members.fetch({ user: ctx.user.id, force: true });
-    if (!actor.roles.cache.some(role => VOICE_ROLES.includes(role.name))) return ctx.reply(`Necesitas el rol ${VOICE_ROLES.join(' o ')}.`);
+    if (ctx.user.id !== ctx.guild.ownerId && !hasModeratorRole(actor, ctx.guild.id)) return ctx.reply('Necesitas un rol de moderación autorizado.');
     const permissions = [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageMessages];
     if (!ctx.channel.permissionsFor(actor)?.has(permissions)) return ctx.reply('Necesitas Ver canal, Leer historial y Gestionar mensajes en este canal.');
     const me = await ctx.guild.members.fetchMe({ force: true });

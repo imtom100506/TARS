@@ -143,3 +143,91 @@ test('repeated Chilean DST hour has separate buckets without lost or doubled voi
   assert.equal(stats.periodoConsultado.horas.length, 2);
   assert.notEqual(stats.periodoConsultado.horas[0].inicioUTC, stats.periodoConsultado.horas[1].inicioUTC);
 });
+
+test('unrecognized explicit periods ask for clarification instead of silently reporting today', () => {
+  for (const question of ['actividad lunes pasado', 'actividad hace 3 días', 'actividad hace una hora',
+    'actividad a las seis', 'actividad el año pasado', 'actividad el 05/10/2026', 'actividad últimos cero días',
+    'actividad hoy hace una hora', 'actividad histórica hace una hora', 'actividad en la última hora']) {
+    assert.throws(() => period(question, '2026-11-05'), { code: 'ACTIVITY_PERIOD' }, question);
+  }
+  assert.deepEqual(period('Buenos días, cómo va la actividad', '2026-11-05'), ['2026-11-05', '2026-11-05']);
+  assert.deepEqual(period('actividad histórica por hora', '2026-11-05'), ['0000-01-01', '2026-11-05']);
+});
+
+test('channel-scoped history excludes private, deleted and legacy data while preserving visible rankings', async () => {
+  const f = fixture();
+  f.g.channels = { cache: new Map([['a', { id: 'a', name: 'Público' }], ['secret', { id: 'secret', name: 'Privado' }]]) };
+  await f.tracker.voice(f.state(null), f.state('a'));
+  await f.tracker.voice(f.state(null, 'v'), f.state('secret', 'v'));
+  f.g.voiceStates.cache.set('u', f.state('a'));
+  f.g.voiceStates.cache.set('v', f.state('secret', 'v'));
+  f.advance(60000);
+  await f.tracker.voice(f.state('a'), f.state('secret'));
+  f.g.voiceStates.cache.set('u', f.state('secret'));
+  f.advance(120000);
+  for (const [id, channelId] of [['u', 'a'], ['v', 'secret'], ['v', 'deleted'], ['v', null]]) {
+    await f.tracker.message({ guild: f.g, author: { id }, channelId });
+  }
+  const context = await f.tracker.context(f.g, 'actividad hoy por hora', 'u', { canViewChannel: c => c.id === 'a' });
+  const stats = JSON.parse(context.split('\n').at(-1));
+  assert.equal(stats.scopedHistory, true);
+  assert.equal(stats.ahoraEnVoz, 0);
+  assert.deepEqual(stats.canalesVoz, []);
+  assert.equal(stats.hoy.usuariosVoz, 1);
+  assert.equal(stats.hoy.vozMs, 60000);
+  assert.equal(stats.hoy.conexiones, 1);
+  assert.equal(stats.hoy.mensajes, 1);
+  assert.equal(stats.hoy.topVoz[0].usuario, 'Tom');
+  assert.equal(stats.periodoConsultado.horas[0].vozMs, 60000);
+  assert.equal(stats.periodoConsultado.horas[0].mensajes, 1);
+  assert.doesNotMatch(context, /Privado|secret|deleted|Ana/);
+  assert.equal((await f.stats()).hoy.mensajes, 4, 'full trusted totals remain available without a channel filter');
+});
+
+test('old aggregate history is never attributed to public channels during migration', async () => {
+  const old = fixture();
+  await old.tracker.message({ guild: old.g, author: { id: 'v' } });
+  await old.tracker.flush();
+  const next = fixture(old.raw());
+  const data = JSON.parse((await next.tracker.context(next.g, 'actividad', 'u', { canViewChannel: () => true })).split('\n').at(-1));
+  assert.equal(data.hoy.mensajes, 0);
+  assert.deepEqual(data.hoy.topTexto, []);
+  assert.equal((await next.stats()).hoy.mensajes, 1);
+});
+
+test('event and daily/hourly retention apply to loads, reads and flushes without new events', async () => {
+  const original = fixture();
+  original.set('2025-11-05T15:00:00Z');
+  await original.tracker.message({ guild: original.g, author: { id: 'u' }, channelId: 'a' });
+  await original.tracker.recordEvent('g', { id: 'old', at: Date.parse('2025-11-05T15:00:00Z') });
+  await original.tracker.flush();
+  const next = fixture(original.raw());
+  assert.deepEqual(await next.tracker.events('g'), []);
+  assert.equal((await next.stats('histórico')).periodoConsultado.mensajes, 0);
+  await next.tracker.flush();
+  const saved = JSON.parse(next.raw()).guilds.g;
+  assert.deepEqual(saved.days, {});
+  assert.deepEqual(saved.hours, {});
+  await next.tracker.recordEvent('g', { id: 'recent', at: Date.parse('2026-11-05T15:00:00Z') });
+  next.advance(46 * 86400000);
+  assert.deepEqual(await next.tracker.events('g'), []);
+  await next.tracker.flush();
+  assert.deepEqual(JSON.parse(next.raw()).guilds.g.events, []);
+});
+
+test('daily retention keeps inclusive cutoff, bounds hourly history and rejects invalid configuration', async () => {
+  let raw;
+  let time = Date.parse('2026-11-03T15:00:00Z');
+  const tracker = createServerActivity({ now: () => time, dailyRetentionDays: 2,
+    store: { read: async () => null, write: async value => { raw = value; } } });
+  const g = { id: 'g', voiceStates: { cache: new Map() }, members: { cache: new Map() } };
+  const message = () => tracker.message({ guild: g, author: { id: 'u' }, channelId: 'a' });
+  await message(); time += 86400000; await message(); time += 86400000; await message();
+  await tracker.flush();
+  assert.deepEqual(Object.keys(JSON.parse(raw).guilds.g.days), ['2026-11-04', '2026-11-05']);
+  assert.equal(Object.keys(JSON.parse(raw).guilds.g.hours).length, 2);
+  const data = JSON.parse((await tracker.context(g, 'histórico')).split('\n').at(-1));
+  assert.equal(data.periodoConsultado.mensajes, 2);
+  assert.equal(data.cobertura.historicoDisponibleDesde, '2026-11-04');
+  for (const days of [0, -1, 1.5, 3651, NaN]) assert.throws(() => createServerActivity({ dailyRetentionDays: days }));
+});

@@ -7,7 +7,7 @@ No necesita una computadora personal encendida. Una sola instancia por token.
 `!entrar` / `/entrar`: di «Hey TARS» seguido de tu consulta. Después de cada respuesta
 tienes 8 segundos para continuar sin repetir la frase, solo con el mismo interlocutor.
 Sale tras 5 minutos de inactividad. También admite `/escuchar` y `/salir`.
-No escucha mientras habla. Detecta hasta tres hablantes simultáneos, sin mezclar
+Durante sus respuestas solo acepta controles del interlocutor activo. Detecta hasta tres hablantes simultáneos, sin mezclar
 sus voces; responde a una pregunta por vez. Las preguntas duran como máximo 12 segundos.
 
 `!borrar 10` borra mensajes del canal; `!borrar @usuario 10` filtra por autor.
@@ -51,11 +51,13 @@ que puede faltar actividad anterior. Se conservan milisegundos en los contadores
 El tiempo sumado entre personas no es la duración de una sola llamada.
 
 TARS también consulta auditoría cuando se pregunta por baneos, expulsiones, mutes,
-ensordecimientos, timeouts o movimientos. Necesita el permiso **Ver registro de
-auditoría** en su rol; el código no puede concedérselo a sí mismo. Usa el intent
-GuildModeration y refresca la API al consultar, porque los movimientos agrupados
-pueden actualizar una entrada sin emitir otro evento. Lee hasta 1.000 entradas
-recientes por consulta, de cualquier tipo, y avisa si alcanzó el límite o falló la
+ensordecimientos, timeouts o movimientos. Tanto TARS como el solicitante necesitan
+**Ver registro de auditoría**. `/tars` entrega estas consultas de forma efímera;
+`!tars` las envía por mensaje privado. En voz pide hacer la consulta por texto.
+Usa el intent GuildModeration y una caché de 30 segundos. La primera lectura
+revisa hasta 1.000 entradas; las siguientes se detienen al alcanzar el historial
+conocido, releyendo siempre la última página para detectar acciones agrupadas.
+Cada usuario puede consultar una vez cada 10 segundos. Avisa si alcanzó el límite o falló la
 lectura. Discord conserva su auditoría 45 días. No se prometen períodos anteriores.
 Las consultas muestran hasta ocho coincidencias; no ejecutan moderación.
 
@@ -64,7 +66,8 @@ Un cambio observado no prueba quién lo causó: solo se atribuye un autor cuando
 consta en auditoría, y no se vinculan movimientos grupales a usuarios por proximidad
 de tiempo. Distingue silencio/ensordecimiento propio de los impuestos por el servidor.
 Los eventos se guardan junto al estado de actividad, hasta 5.000 por servidor y
-45 días. Los contadores diarios existentes se conservan sin esa purga.
+45 días. Los contadores diarios y horarios se conservan 365 días por defecto,
+configurables con `TARS_ACTIVITY_RETENTION_DAYS` (1 a 3650).
 
 Puedes preguntar «¿Cómo ha ido la actividad del servidor?», «¿Quién participa más
 en voz hoy?», «¿Cuántas veces se ha conectado @usuario en el histórico?» o
@@ -94,10 +97,19 @@ ni audio en este registro. Usa un archivo adjunto de estado separado en
 configurado usa `TARS_DATA_DIR/server-activity.json` (requiere disco persistente).
 Conserva el mensaje «TARS · Actividad del servidor · No borrar». Si falla la lectura,
 no se sobrescribe y TARS avisa que las estadísticas no están disponibles.
-El almacenamiento no tiene purga automática: el historial crece con los días y
-usuarios activos y queda sujeto al límite de adjuntos de Discord.
+La purga se aplica al cargar, consultar y guardar. El tamaño sigue sujeto al límite
+de adjuntos de Discord. Si alguien borra el mensaje mientras TARS está conectado,
+se reconstruye desde su estado ya cargado; una lectura fallida nunca se sustituye
+por un registro vacío. No es un respaldo frente a la pérdida del registro y del proceso a la vez.
 
-Con voz habilitada, el registro privado de Discord conserva los límites internos:
+Las respuestas de actividad incluyen canales públicos y el propio canal donde se
+consulta, siempre que el solicitante pueda verlos. No exponen canales privados a
+otras audiencias. Los nuevos agregados conservan el canal de origen; los totales
+antiguos sin esa información no se usan para construir respuestas públicas.
+Un período ambiguo pide aclaración en lugar de asumir que significa hoy.
+
+Con voz habilitada o deshabilitada, el registro privado de Discord conserva los límites internos
+(sin canal configurado, usa `TARS_DATA_DIR/usage.json`):
 500 intentos de API, 100.000 tokens estimados y 3.600 segundos de audio por 24 horas
 móviles. Se permiten 20 transcripciones y 6 respuestas por minuto, separadamente;
 configurables con TARS_STT_REQUESTS_PER_MINUTE y TARS_LLM_REQUESTS_PER_MINUTE.
@@ -124,7 +136,9 @@ Logs: `[voz:tiempos]` para latencia, `[voz:detector]` para recepción/detección
 
 ## Desarrollo
 
-Node 24. `npm ci`, `npm test`. Docker instala ffmpeg y eSpeak NG, además de los
+Node 24.22.2 o revisión posterior de Node 24; `.node-version` fija la versión probada.
+`npm ci`, `npm run check`, `npm run test:coverage`, `npm audit --omit=dev`.
+Docker instala ffmpeg y eSpeak NG, además de los
 modelos de voz. `TARS_WAKE_ENABLED=false` vuelve a la activación manual;
 `TARS_TTS_ENGINE=espeak` usa la voz ligera. Render y los proveedores gratuitos
 pueden suspender o limitar el servicio; no se garantiza disponibilidad permanente.
@@ -143,21 +157,47 @@ Referencia de límites: https://console.groq.com/docs/rate-limits
 
 ## Restauración selectiva
 
-La recepción, síntesis y registros de voz, junto al emisor de logs de Discord,
-usarán la implementación del 10/10/2026 (996b3d0). Los comandos escritos, borrado
-con confirmación, permisos y moderación se conservan. Se mantienen las mejoras
-compartidas de IA posteriores: colas independientes para texto y voz, cancelación
-de esperas, procesamiento SSE y presupuestos configurables con recuperación precisa.
-No se activa la escucha global, la voz Ald ni el nuevo formato de logs.
+Se conserva la base de voz del 10/10/2026 (996b3d0), con correcciones posteriores de
+privacidad, permisos, reproducción por fragmentos y límites. Las respuestas largas
+se reproducen completas en fragmentos; el registro solo incluye los que terminaron.
+Se mantienen colas independientes para texto y voz y cancelación de esperas.
 
 ### Dos órdenes locales de voz
 
 Se reincorporan salida ("TARS, salte del canal", "TARS, desconéctate") y
 autodestrucción de broma ("TARS, autodestrucción"). Se conserva la activación
 manual /escuchar o Hey TARS; durante respuestas y cuenta regresiva se reciben
-órdenes prioritarias del mismo canal. No se activa escucha global en reposo.
+órdenes prioritarias únicamente del interlocutor que inició la consulta o la cuenta.
 La cuenta reproduce 5, 4, 3, 2, 1 con un WAV de cinco segundos generado con la voz
 Davefx y ajustes existentes. No sintetiza ni consulta al modelo al ejecutarla.
 Repetir la orden no reinicia el plazo; una salida normal desconecta inmediatamente.
 Las negaciones no activan estas órdenes. El audio fallido no cancela la salida.
-Se registran inicio y desconexión usando el emisor y formato de logs existentes.
+Se registran inicio y desconexión como metadatos operacionales.
+
+## Privacidad, permisos y disponibilidad
+
+La memoria conversacional se separa por servidor, canal, usuario y modalidad.
+`reset` invalida también turnos pendientes y retira las intervenciones del usuario
+del contexto reciente en memoria. No elimina mensajes de Discord ni registros persistidos.
+Los logs operacionales no contienen preguntas, respuestas ni mensajes privados.
+`TARS_LOG_CHANNELS` permite un mapa JSON servidor→canal; cada destino debe pertenecer
+al mismo servidor. El registro de conversaciones de voz descrito arriba es independiente.
+
+Los roles de moderación se autorizan por ID en `config/moderation-roles.json`, con
+los IDs existentes de Líder y Sigma. `TARS_MODERATOR_ROLE_IDS` puede reemplazarlos
+con una lista separada por comas. Revisa esa configuración si recreas los roles.
+Desconectar requiere además Mover miembros en el canal y jerarquía válida para el
+solicitante y TARS. El dueño conserva su excepción de rol y jerarquía propia.
+
+Texto y voz tienen límites previos a las operaciones costosas: 6 solicitudes por
+usuario y 30 por servidor por minuto, además del presupuesto persistente del proveedor.
+Los límites de texto y voz son independientes; dentro de voz se comparten entre
+activación manual, detector, continuación y controles prioritarios.
+
+`/live` comprueba que el proceso HTTP responde. `/ready` devuelve 503 hasta que
+Discord esté conectado y se hayan validado actividad, recuperación de mutes y cuota;
+también deja de estar listo si las revisiones fallan o caducan. Docker lo usa para
+su healthcheck y prepara `/app/data` escribible por el usuario sin privilegios.
+Para persistencia local, monta un volumen en esa ruta. CI ejecuta las pruebas,
+audita dependencias y construye el contenedor con una prueba real de modelos,
+binarios y escritura sin red ni credenciales.

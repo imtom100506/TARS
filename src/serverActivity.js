@@ -7,39 +7,50 @@ const zone = 'America/Santiago';
 const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' });
 const day = time => formatter.format(new Date(time));
 const shift = (date, n) => new Date(Date.parse(`${date}T12:00:00Z`) + n * 86400000).toISOString().slice(0, 10);
+const periodError = () => Object.assign(new Error('Dime el período con fechas YYYY-MM-DD; no quiero confundirlo con hoy.'), { code: 'ACTIVITY_PERIOD' });
 
 function period(text, today) {
   text = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const dates = text.match(/\b\d{4}-\d{2}-\d{2}\b/g);
   if (dates?.length) {
-    if (dates.some(d => !Number.isFinite(Date.parse(d)) || new Date(d).toISOString().slice(0, 10) !== d) || dates[0] > (dates[1] || dates[0])) throw Error('Período inválido: solicita fechas reales YYYY-MM-DD en orden cronológico.');
+    if (dates.length > 2 || dates.some(d => !Number.isFinite(Date.parse(d)) || new Date(d).toISOString().slice(0, 10) !== d) || dates[0] > (dates[1] || dates[0])) throw periodError();
     return [dates[0], dates[1] || dates[0]];
   }
+  // Unsupported explicit dates must not silently become "today".
+  if (/\b(lunes|martes|miercoles|jueves|viernes|sabado|domingo|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|manana|anteanoche|ano|anos|hace|madrugada)\b|\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b|\b\d+\s*(semanas?|meses)\b|\b(?:ultimas?|pasadas?)\s+(?:\w+\s+)?horas?\b|\b(?:esta|la)\s+(?:tarde|noche)\b/.test(text)) throw periodError();
+  if ((text.match(/\b(hoy|ayer|anteayer)\b/g) || []).length > 1) throw periodError();
   if (/\bhoy\b/.test(text)) return [today, today];
-  if (/anteayer/.test(text)) return [shift(today, -2), shift(today, -2)];
-  if (/ayer/.test(text)) return [shift(today, -1), shift(today, -1)];
+  if (/\banteayer\b/.test(text)) return [shift(today, -2), shift(today, -2)];
+  if (/\bayer\b/.test(text)) return [shift(today, -1), shift(today, -1)];
   const last = text.match(/ultimos?\s+(\d+)\s+dias?/);
-  if (last) return [shift(today, -Math.max(0, Math.min(36500, Number(last[1])) - 1)), today];
+  if (last) {
+    if (Number(last[1]) < 1 || Number(last[1]) > 36500) throw periodError();
+    return [shift(today, -(Number(last[1]) - 1)), today];
+  }
   const monday = shift(today, -((new Date(`${today}T12:00:00Z`).getUTCDay() + 6) % 7));
   if (/semana pasada/.test(text)) return [shift(monday, -7), shift(monday, -1)];
   if (/esta semana/.test(text)) return [monday, today];
-  if (/semana/.test(text)) return [shift(today, -6), today];
+  if (/\b(?:la|ultima) semana\b/.test(text)) return [shift(today, -6), today];
   if (/mes pasado/.test(text)) {
     const end = shift(today.slice(0, 7) + '-01', -1);
     return [end.slice(0, 7) + '-01', end];
   }
   if (/este mes/.test(text)) return [today.slice(0, 7) + '-01', today];
-  if (/mes/.test(text)) return [shift(today, -29), today];
+  if (/\b(?:el|ultimo) mes\b/.test(text)) return [shift(today, -29), today];
+  const hourRequest = hourlyQuery(text, today, today, today);
+  if (!hourRequest && /\b(?:desde|hasta|entre|pasad[oa]s?|anterior(?:es)?|semana|mes)\b|\ba las\b|\bultimos?\s+(?:\w+\s+)?dias?\b/.test(text)) throw periodError();
   if (/histor|siempre|total|han conectado|por dia|al dia|diari/.test(text)) return ['0000-01-01', today];
+  if (hourRequest) return [today, today];
   return [today, today];
 }
 
-function createServerActivity({ store, now = Date.now,
+function createServerActivity({ store, now = Date.now, dailyRetentionDays = Number(process.env.TARS_ACTIVITY_RETENTION_DAYS || 365),
   file = path.join(process.env.TARS_DATA_DIR || path.join(__dirname, '..', 'data'), 'server-activity.json') } = {}) {
   let data, queue = Promise.resolve();
+  if (!Number.isInteger(dailyRetentionDays) || dailyRetentionDays < 1 || dailyRetentionDays > 3650) throw new Error('TARS_ACTIVITY_RETENTION_DAYS debe estar entre 1 y 3650.');
   const sessions = new Map();
   const serial = fn => {
-    const task = queue.then(async () => { await load(); return fn(); });
+    const task = queue.then(async () => { await load(); prune(); return fn(); });
     queue = task.catch(() => {});
     return task;
   };
@@ -51,8 +62,10 @@ function createServerActivity({ store, now = Date.now,
     const parsed = raw ? JSON.parse(raw) : { version: 1, guilds: {} };
     const object = value => value && typeof value === 'object' && !Array.isArray(value);
     const count = value => Number.isFinite(value) && value >= 0;
-    const validBucket = b => object(b) && count(b.joins) && count(b.leaves) && object(b.users) && Object.values(b.users).every(u =>
+    const validUsers = users => object(users) && Object.values(users).every(u =>
       object(u) && typeof u.voice === 'boolean' && ['connections', 'voiceMs', 'messages', 'attachments'].every(k => count(u[k])));
+    const validBucket = b => object(b) && count(b.joins) && count(b.leaves) && validUsers(b.users) &&
+      (b.channels === undefined || object(b.channels) && Object.values(b.channels).every(validUsers));
     if (parsed.version !== 1 || !object(parsed.guilds) || !Object.values(parsed.guilds).every(g =>
       object(g) && count(g.since) && (g.events === undefined || Array.isArray(g.events) && g.events.every(e => object(e) && typeof e.id === 'string' && count(e.at))) && object(g.days) && Object.values(g.days).every(validBucket) &&
       (g.hourlySince === undefined || count(g.hourlySince)) &&
@@ -60,6 +73,17 @@ function createServerActivity({ store, now = Date.now,
       throw Error('Registro de actividad inválido; no se sobrescribe.');
     }
     data = parsed;
+    prune();
+  }
+  const cutoffDay = () => shift(day(now()), -(dailyRetentionDays - 1));
+  function prune() {
+    if (!data) return;
+    const cutoff = cutoffDay(), eventCutoff = now() - 45 * 86400000;
+    for (const g of Object.values(data.guilds)) {
+      for (const date of Object.keys(g.days)) if (date < cutoff) delete g.days[date];
+      for (const hour of Object.keys(g.hours || {})) if (day(Number(hour)) < cutoff) delete g.hours[hour];
+      if (g.events) g.events = g.events.filter(e => e.at >= eventCutoff).sort((a, b) => a.at - b.at).slice(-5000);
+    }
   }
   function guild(id, time = now()) {
     const g = data.guilds[id] ||= { since: time, days: {} };
@@ -70,14 +94,20 @@ function createServerActivity({ store, now = Date.now,
   function bucket(id, date) {
     return guild(id).days[date] ||= { users: {}, joins: 0, leaves: 0 };
   }
-  function user(id, date, uid) {
-    return bucket(id, date).users[uid] ||= { connections: 0, voiceMs: 0, voice: false, messages: 0, attachments: 0 };
-  }
   function hourlyBucket(id, time) {
     return guild(id).hours[hourKey(time)] ||= { users: {}, joins: 0, leaves: 0 };
   }
-  function hourlyUser(id, time, uid) {
-    return hourlyBucket(id, time).users[uid] ||= { connections: 0, voiceMs: 0, voice: false, messages: 0, attachments: 0 };
+  function userRows(id, time, uid, channelId) {
+    const rows = [];
+    for (const b of [bucket(id, day(time)), hourlyBucket(id, time)]) {
+      rows.push(b.users[uid] ||= { connections: 0, voiceMs: 0, voice: false, messages: 0, attachments: 0 });
+      if (channelId) {
+        const channels = b.channels ||= {};
+        const users = channels[channelId] ||= {};
+        rows.push(users[uid] ||= { connections: 0, voiceMs: 0, voice: false, messages: 0, attachments: 0 });
+      }
+    }
+    return rows;
   }
   function accrue(session, end) {
     let start = session.at;
@@ -91,18 +121,17 @@ function createServerActivity({ store, now = Date.now,
         while (lo < hi) { const mid = Math.floor((lo + hi) / 2); if (day(mid) === date) lo = mid + 1; else hi = mid; }
         boundary = lo;
       }
-      const row = user(session.guildId, date, session.userId);
-      row.voice = true;
-      row.voiceMs += boundary - start;
-      const hourly = hourlyUser(session.guildId, start, session.userId);
-      hourly.voice = true;
-      hourly.voiceMs += boundary - start;
+      if (date >= cutoffDay()) for (const row of userRows(session.guildId, start, session.userId, session.channelId)) {
+        row.voice = true;
+        row.voiceMs += boundary - start;
+      }
       start = boundary;
     }
     session.at = end;
   }
   function checkpoint(time) { for (const session of sessions.values()) accrue(session, time); }
   async function save() {
+    prune();
     const raw = JSON.stringify(data);
     if (store) return store.write(raw);
     await fs.mkdir(path.dirname(file), { recursive: true });
@@ -116,9 +145,8 @@ function createServerActivity({ store, now = Date.now,
       if (!state.channelId || state.member?.user.bot || !state.member) continue;
       const k = key(g.id, state.id);
       if (!sessions.has(k)) {
-        sessions.set(k, { guildId: g.id, userId: state.id, at: now(), observedSince: now(), unknownStart: true });
-        user(g.id, day(now()), state.id).voice = true;
-        hourlyUser(g.id, now(), state.id).voice = true;
+        sessions.set(k, { guildId: g.id, userId: state.id, channelId: state.channelId, at: now(), observedSince: now(), unknownStart: true });
+        for (const row of userRows(g.id, now(), state.id, state.channelId)) row.voice = true;
       }
     }
   }
@@ -135,7 +163,7 @@ function createServerActivity({ store, now = Date.now,
       const events = g.events ||= [];
       const index = events.findIndex(e => e.id === event.id);
       if (index < 0) events.push(event); else events[index] = event;
-      g.events = events.filter(e => e.at >= now() - 45 * 86400000).sort((a, b) => a.at - b.at).slice(-5000);
+      prune();
     }),
     events: guildId => serial(() => [...(guild(guildId).events || [])]),
     voice: (oldState, newState) => {
@@ -147,26 +175,23 @@ function createServerActivity({ store, now = Date.now,
         if (active) time = Math.max(time, active.at);
         if (active) accrue(active, time);
         if (!newState.channelId) { sessions.delete(k); return; }
-        const row = user(gid, day(time), uid);
-        const hourly = hourlyUser(gid, time, uid);
-        row.voice = true;
-        hourly.voice = true;
-        // Moves, mute/deafen changes and sessions already active at startup are not connections.
-        if (!oldState.channelId) { row.connections++; hourly.connections++; }
-        sessions.set(k, { guildId: gid, userId: uid, at: time,
+        for (const row of userRows(gid, time, uid, newState.channelId)) {
+          row.voice = true;
+          // Moves, mute/deafen changes and sessions already active at startup are not connections.
+          if (!oldState.channelId) row.connections++;
+        }
+        sessions.set(k, { guildId: gid, userId: uid, channelId: newState.channelId, at: time,
           observedSince: active?.observedSince ?? time, unknownStart: active?.unknownStart ?? !!oldState.channelId });
       });
     },
     message: message => {
       const time = message.createdTimestamp || now();
       return serial(() => {
-        if (!message.guild || message.author.bot) return;
-        const row = user(message.guild.id, day(time), message.author.id);
-        row.messages++;
-        row.attachments += message.attachments?.size || 0;
-        const hourly = hourlyUser(message.guild.id, time, message.author.id);
-        hourly.messages++;
-        hourly.attachments += message.attachments?.size || 0;
+        if (!message.guild || message.author.bot || day(time) < cutoffDay()) return;
+        for (const row of userRows(message.guild.id, time, message.author.id, message.channelId || message.channel?.id)) {
+          row.messages++;
+          row.attachments += message.attachments?.size || 0;
+        }
       });
     },
     member: (member, joined) => {
@@ -176,30 +201,40 @@ function createServerActivity({ store, now = Date.now,
         hourlyBucket(member.guild.id, time)[joined ? 'joins' : 'leaves']++;
       } });
     },
-    context: (g, question = '', requesterId) => serial(() => {
+    context: (g, question = '', requesterId, { canViewChannel, historyRestricted = typeof canViewChannel === 'function' } = {}) => serial(() => {
       if (!g) return '';
       const time = now();
       checkpoint(time);
       const record = guild(g.id), today = day(time), [from, to] = period(question, today);
       const hourly = hourlyQuery(question, from, to, today);
+      const visible = channelId => {
+        if (!canViewChannel) return true;
+        const channel = g.channels?.cache.get(channelId) ||
+          [...g.voiceStates.cache.values()].find(s => s.channelId === channelId)?.channel;
+        return !!channel && canViewChannel(channel) === true;
+      };
       function summarize(start, end, hours = false) {
         const users = {}, daily = [];
         let joins = 0, leaves = 0;
         for (const [key, b] of Object.entries(hours ? record.hours : record.days).sort()) {
           const date = hours ? hourLabel(Number(key)) : key;
           if (date < start || (hours ? date >= end : date > end)) continue;
-          let connections = 0, voiceUsers = 0;
+          let connections = 0, voiceUsers = 0, messages = 0, voiceMs = 0;
           joins += b.joins; leaves += b.leaves;
-          for (const [uid, row] of Object.entries(b.users)) {
+          const scopes = historyRestricted ? Object.entries(b.channels || {}).filter(([id]) => visible(id)).map(([, users]) => users) : [b.users];
+          const dayVoiceUsers = new Set();
+          for (const scope of scopes) for (const [uid, row] of Object.entries(scope)) {
             const u = users[uid] ||= { id: uid, connections: 0, voiceMs: 0, voice: false, messages: 0, attachments: 0 };
             for (const field of ['connections', 'voiceMs', 'messages', 'attachments']) u[field] += row[field];
             u.voice ||= row.voice;
-            connections += row.connections; voiceUsers += Number(row.voice);
+            connections += row.connections;
+            messages += row.messages; voiceMs += row.voiceMs;
+            if (row.voice) dayVoiceUsers.add(uid);
           }
+          voiceUsers = dayVoiceUsers.size;
           daily.push({ fecha: date, conexiones: connections, usuariosVoz: voiceUsers,
             ...(hours ? { hora: `${date.replace('T', ' ')}:00`, inicioUTC: new Date(Number(key)).toISOString(),
-              mensajes: Object.values(b.users).reduce((n, u) => n + u.messages, 0),
-              vozMs: Object.values(b.users).reduce((n, u) => n + u.voiceMs, 0) } : {}) });
+              mensajes: messages, vozMs: voiceMs } : {}) });
         }
         const rows = Object.values(users);
         const maxVoice = rows.reduce((max, u) => Math.max(max, u.voiceMs), 0);
@@ -210,7 +245,7 @@ function createServerActivity({ store, now = Date.now,
         };
         const target = rows.filter(u => u.id === requesterId || question.includes(u.id) || [g.members.cache.get(u.id)?.displayName, g.members.cache.get(u.id)?.user.username].some(n => n && question.toLowerCase().includes(n.toLowerCase())));
         return {
-          desde: start === '0000-01-01' ? day(record.since) : start, hasta: end,
+          desde: start === '0000-01-01' ? [day(record.since), cutoffDay()].sort().at(-1) : start, hasta: end,
           conexiones: rows.reduce((n, u) => n + u.connections, 0), usuariosVoz: rows.filter(u => u.voice).length,
           vozMs: rows.reduce((n, u) => n + u.voiceMs, 0),
           minutosVoz: rows.reduce((n, u) => n + u.voiceMs, 0) / 60000,
@@ -225,7 +260,7 @@ function createServerActivity({ store, now = Date.now,
           ...(/dia|diari/i.test(question) ? { ultimosDiasRegistrados: daily.slice(-14), diasRegistrados: daily.length } : {}),
         };
       }
-      const current = [...g.voiceStates.cache.values()].filter(s => s.channelId && s.member && !s.member.user.bot);
+      const current = [...g.voiceStates.cache.values()].filter(s => s.channelId && s.member && !s.member.user.bot && visible(s.channelId));
       const channels = new Map();
       for (const s of current) {
         const entry = channels.get(s.channelId) || { id: s.channelId, nombre: s.channel?.name || g.channels?.cache.get(s.channelId)?.name || s.channelId, personas: 0 };
@@ -237,7 +272,9 @@ function createServerActivity({ store, now = Date.now,
         'Solo humanos. Registro desde ' + new Date(record.since).toISOString() + '; zona America/Santiago. ' +
         'Cobertura parcial: no incluye antes del registro ni períodos sin conexión del bot; no inventes datos faltantes ni interpretes ausencia de registro como cero real. ' +
         'Para fechas ambiguas pide fechas YYYY-MM-DD. Rankings limitados a 3; desglose diario limitado a últimos 14 días registrados.\n' +
-        JSON.stringify({ cobertura: { registroDesde: record.since, consultadoEn: time, zona: zone, parcial: true,
+        JSON.stringify({ historyRestricted, scopedHistory: historyRestricted,
+          cobertura: { registroDesde: record.since, consultadoEn: time, zona: zone, parcial: true,
+          diasRetenidos: dailyRetentionDays, historicoDisponibleDesde: [day(record.since), cutoffDay()].sort().at(-1),
           sesionesActualesConInicioDesconocido: current.filter(s => sessions.get(key(g.id, s.id))?.unknownStart !== false).length },
           ahoraEnVoz: current.length, canalesVoz: [...channels.values()], participantesActualesPrimeros10: current.slice(0, 10).map(s => ({
           id: s.id, usuario: s.member.displayName || s.id, canal: s.channel?.name || s.channelId,

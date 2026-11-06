@@ -6,8 +6,10 @@ const FOLLOWUP_MS = 8000;
 const MAX_AUDIO_BYTES = 12 * 32000;
 
 const { activityReply } = require('./activityReply');
+const { speechChunks } = require('./speechText');
+const { createRequestLimits } = require('./requestLimits');
 function createVoice({ client, askAI, audio, getContext = async () => '', getAuditReply = async () => null, recordConversation = () => {}, sendLog = () => {}, enabled = false, api, decoderFactory, wakeFactory = null, now = Date.now,
-  setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
+  setTimer = setTimeout, clearTimer = clearTimeout, allowRequest = createRequestLimits({ now }) } = {}) {
   let session, joining = false;
   const load = () => {
     api ||= require('@discordjs/voice');
@@ -103,6 +105,7 @@ function createVoice({ client, askAI, audio, getContext = async () => '', getAud
           timings.detector_ms = now() - detectorStarted;
         }
         s.priority = require('./priorityReceiver').priorityReceiver({ s, api, decoderFactory, audio, setTimer, clearTimer, client,
+          allowRequest,
           onText: (text, id) => control(s, text, id), onError: error => console.warn('[voz:control]', error.code || error.name) });
         s.subscription = connection.subscribe(s.player); schedule(s);
         void audio.warm?.();
@@ -120,12 +123,27 @@ function createVoice({ client, askAI, audio, getContext = async () => '', getAud
     return respond(s, ctx.user.id, undefined, ctx);
   }
   async function respond(s, userId, source, ctx) {
+    if (s.closed || s.busy || s.countdown || !s.voiceChannel.members.has(userId)) return;
+    if (!allowRequest(userId, s.voiceChannel.guild.id)) {
+      // Wake detection may already have transferred a live stream. Discard it locally.
+      const discarded = source || s.wake?.take(userId);
+      discarded?.input?.unpipe(discarded.decoder);
+      discarded?.input?.destroy(); discarded?.decoder?.destroy();
+      const message = 'Dame un momento antes de otra consulta de voz.';
+      if (ctx) await ctx.reply(message);
+      else if (s.limitNotice === undefined || now() - s.limitNotice >= 60000) {
+        s.limitNotice = now(); await tell(s, message);
+      }
+      return;
+    }
     const started = now(), timings = {};
     let stage = started;
     const mark = key => { timings[key] = now() - stage; stage = now(); };
     const followup = !source && !ctx;
     // Reutilizar la recepción existente: destroy() no la retira de Discord hasta «close».
     source ||= s.wake?.take(userId);
+    s.priority?.pause();
+    s.activeUser = userId;
     s.busy = true; s.capturing = true; s.workAbort = new AbortController();
     const signal = AbortSignal.any([s.abort.signal, s.workAbort.signal]);
     s.wake?.pause();
@@ -133,6 +151,7 @@ function createVoice({ client, askAI, audio, getContext = async () => '', getAud
     if (!followup) { s.lastCall = now(); schedule(s); }
     s.followupUntil = 0;
     let answered = false, empty = false;
+    const delivered = [];
     try {
       // Se suscribe ANTES del aviso para no perder el inicio de la pregunta.
       const captured = capture(s, userId, source);
@@ -140,7 +159,7 @@ function createVoice({ client, askAI, audio, getContext = async () => '', getAud
       const pcm = await captured;
       mark('captura_ms'); s.capturing = false;
       if (s.closed) return;
-      const question = await audio.transcribe(pcm, s.abort.signal);
+      const question = await audio.transcribe(pcm, signal);
       mark('transcripcion_ms');
       if (s.closed) return;
       if (!question) {
@@ -152,21 +171,29 @@ function createVoice({ client, askAI, audio, getContext = async () => '', getAud
       signal.throwIfAborted();
       if (followup) { s.lastCall = now(); schedule(s); }
       recordConversation({ guildId: s.voiceChannel.guild.id, channelId: s.voiceChannel.id, userId, role: 'user', text: question });
-      const context = await getContext(s.voiceChannel.guild, question, userId);
-      const reply = await getAuditReply(s.voiceChannel.guild, question, { voice: true }) || activityReply(context, question, userId, { voice: true }) || await askAI(userId, question, { voice: true, signal, context });
+      const context = await getContext(s.voiceChannel.guild, question, userId, s.voiceChannel.id);
+      const reply = await getAuditReply(s.voiceChannel.guild, question, { voice: true, requesterId: userId, channelId: s.voiceChannel.id }) ||
+        activityReply(context, question, userId, { voice: true }) || await askAI(userId, question, {
+          voice: true, signal, context, conversationId: `voice:${s.voiceChannel.guild.id}:${s.voiceChannel.id}`,
+        });
       signal.throwIfAborted();
       mark('respuesta_ms');
       if (s.closed) return;
-      const wav = await audio.synthesize(reply, signal);
-      signal.throwIfAborted();
-      mark('sintesis_ms');
-      if (s.closed) return;
-      s.resource = api.createAudioResource(Readable.from([wav]), { inputType: api.StreamType.Arbitrary });
-      s.player.play(s.resource);
-      await api.entersState(s.player, api.AudioPlayerStatus.Playing, AbortSignal.any([signal, AbortSignal.timeout(10000)]));
-      await api.entersState(s.player, api.AudioPlayerStatus.Idle, AbortSignal.any([signal, AbortSignal.timeout(45000)]));
-      signal.throwIfAborted();
-      if (!s.closed) recordConversation({ guildId: s.voiceChannel.guild.id, channelId: s.voiceChannel.id, userId, role: 'assistant', text: reply });
+      const chunks = speechChunks(reply);
+      if (!chunks.length) throw new Error('Respuesta sin texto reproducible.');
+      for (const chunk of chunks) {
+        const wav = await audio.synthesize(chunk, signal);
+        signal.throwIfAborted();
+        mark('sintesis_ms');
+        if (s.closed) return;
+        s.resource = api.createAudioResource(Readable.from([wav]), { inputType: api.StreamType.Arbitrary });
+        s.player.play(s.resource);
+        await api.entersState(s.player, api.AudioPlayerStatus.Playing, AbortSignal.any([signal, AbortSignal.timeout(10000)]));
+        await api.entersState(s.player, api.AudioPlayerStatus.Idle, AbortSignal.any([signal, AbortSignal.timeout(45000)]));
+        signal.throwIfAborted();
+        delivered.push(chunk);
+        s.resource?.playStream.destroy(); s.resource = undefined;
+      }
       answered = true;
     } catch (error) {
       if (signal.aborted) return;
@@ -178,10 +205,13 @@ function createVoice({ client, askAI, audio, getContext = async () => '', getAud
       }
       if (!s.closed) await tell(s, error.code === 'AI_BUDGET' ? error.message : 'No pude completar la respuesta de voz. No reintentaré automáticamente.');
     } finally {
+      if (delivered.length) recordConversation({ guildId: s.voiceChannel.guild.id, channelId: s.voiceChannel.id, userId, role: 'assistant', text: delivered.join(' ') });
       console.info('[voz:tiempos]', JSON.stringify({ ...timings, total_ms: now() - started }));
       s.cancelCapture?.(); s.capturing = false;
       if (!s.countdown) { s.resource?.playStream.destroy(); s.resource = undefined; s.player.stop(true); }
       s.busy = false;
+      s.activeUser = undefined;
+      s.priority?.pause();
       if (!s.closed && !s.countdown && now() - s.lastCall >= IDLE_MS) leave(s);
       if (!s.closed && answered) { s.followupUser = userId; s.followupUntil = now() + FOLLOWUP_MS; }
       // Un ruido o silencio no consume ni prolonga la ventana de continuación.

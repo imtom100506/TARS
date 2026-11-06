@@ -198,3 +198,94 @@ test('provider fallback emits operational metadata without prompt or credentials
   assert.equal(events.length, 1); assert.equal(events[0].proveedor, 'Groq');
   assert.doesNotMatch(JSON.stringify(events), /secret-key|private question/);
 });
+
+test('conversation scopes isolate DMs, public channels, servers, users and voice', async () => {
+  const { conversationScope } = require('../src/conversationScope');
+  const payloads = [];
+  const ai = make(async (_, init) => { payloads.push(JSON.parse(init.body)); return ok('ok'); });
+  const privateScope = conversationScope({ channelId: 'dm-channel', userId: 'u' });
+  await ai.askAI('u', 'PRIVATE_MARKER', { conversationId: privateScope });
+  const scopes = [
+    { guildId: 'guild-a', channelId: 'public-a', userId: 'u' },
+    { guildId: 'guild-a', channelId: 'public-b', userId: 'u' },
+    { guildId: 'guild-b', channelId: 'public-b', userId: 'u' },
+    { guildId: 'guild-b', channelId: 'public-b', userId: 'u', modality: 'voice' },
+  ];
+  for (const scope of scopes) {
+    await ai.askAI('u', 'public question', { conversationId: conversationScope(scope), voice: scope.modality === 'voice' });
+    assert.equal(payloads.at(-1).messages.length, 2);
+    assert.doesNotMatch(JSON.stringify(payloads.at(-1)), /PRIVATE_MARKER/);
+  }
+  await ai.askAI('different-user', 'same caller scope', { conversationId: privateScope });
+  assert.equal(payloads.at(-1).messages.length, 2);
+  await ai.askAI('u', 'private followup', { conversationId: privateScope });
+  assert.match(JSON.stringify(payloads.at(-1)), /PRIVATE_MARKER/);
+  assert.throws(() => conversationScope({ userId: 'u' }));
+});
+
+test('reset invalidates every active scope and queued request for a user', async () => {
+  const payloads = [], releases = [];
+  const ai = make(async (_, init) => {
+    const position = payloads.push(JSON.parse(init.body));
+    if (position <= 2) await new Promise(resolve => { releases[position - 1] = resolve; });
+    return ok('ok');
+  });
+  const first = ai.askAI('u', 'TEXT_TO_FORGET', { conversationId: 'text-channel' });
+  const second = ai.askAI('u', 'VOICE_TO_FORGET', { conversationId: 'voice-channel', voice: true });
+  const queued = assert.rejects(ai.askAI('u', 'QUEUED_TO_FORGET', { conversationId: 'third-channel' }), { code: 'AI_RESET' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(payloads.length, 2);
+  ai.clearHistory('u');
+  releases[1](); await second;
+  releases[0](); await first; await queued;
+  assert.equal(payloads.length, 2, 'reset queued requests never reach a provider');
+  for (const conversationId of ['text-channel', 'voice-channel', 'third-channel']) {
+    await ai.askAI('u', 'new question', { conversationId });
+    assert.doesNotMatch(JSON.stringify(payloads.at(-1)), /TO_FORGET/);
+    assert.equal(payloads.at(-1).messages.length, 2);
+  }
+});
+
+test('shared explicit scope serializes text and voice without overwriting completed turns', async () => {
+  const payloads = []; let release;
+  const ai = make(async (_, init) => {
+    const position = payloads.push(JSON.parse(init.body));
+    if (position === 1) await new Promise(resolve => { release = resolve; });
+    return ok('ok');
+  });
+  const text = ai.askAI('u', 'first text', { conversationId: 'shared' });
+  const voice = ai.askAI('u', 'second voice', { conversationId: 'shared', voice: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(payloads.length, 1);
+  release(); await Promise.all([text, voice]);
+  assert.match(JSON.stringify(payloads[1]), /first text/);
+  await ai.askAI('u', 'third turn', { conversationId: 'shared' });
+  assert.match(JSON.stringify(payloads[2]), /first text/);
+  assert.match(JSON.stringify(payloads[2]), /second voice/);
+});
+
+test('reset removes completed scopes of only the requested user', async () => {
+  const payloads = [];
+  const ai = make(async (_, init) => { payloads.push(JSON.parse(init.body)); return ok('ok'); });
+  await ai.askAI('u', 'forget a', { conversationId: 'a' });
+  await ai.askAI('u', 'forget b', { conversationId: 'b' });
+  await ai.askAI('v', 'keep v', { conversationId: 'a' });
+  ai.clearHistory('u');
+  for (const conversationId of ['a', 'b']) {
+    await ai.askAI('u', 'new', { conversationId });
+    assert.equal(payloads.at(-1).messages.length, 2);
+  }
+  await ai.askAI('v', 'next', { conversationId: 'a' });
+  assert.match(JSON.stringify(payloads.at(-1)), /keep v/);
+});
+
+test('history capacity bounds conversations rather than retaining unlimited scopes for one user', async () => {
+  const payloads = [];
+  const ai = createAI({ env, maxHistories: 2, systemPrompt: 'TARS', spacingMs: 0,
+    fetchImpl: async (_, init) => { payloads.push(JSON.parse(init.body)); return ok('ok'); } });
+  for (const conversationId of ['a', 'b', 'c']) await ai.askAI('u', `old-${conversationId}`, { conversationId });
+  await ai.askAI('u', 'new a', { conversationId: 'a' });
+  assert.equal(payloads.at(-1).messages.length, 2);
+  await ai.askAI('u', 'new c', { conversationId: 'c' });
+  assert.match(JSON.stringify(payloads.at(-1)), /old-c/);
+});

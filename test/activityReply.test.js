@@ -139,3 +139,16 @@ test('hourly replies name the period and reject unsupported minutes instead of u
   const invalid = 'actividad hoy de 18:15 a 19:30';
   assert.match(activityReply(await f.context(invalid), invalid), /horas completas/);
 });
+
+test('mi servidor asks for community activity while personal pronouns still select the requester', async () => {
+  const f = await scenario(); f.advance(60000);
+  await f.tracker.message({ guild: f.guild, author: { id: '1' } });
+  const general = 'cómo va la actividad de mi servidor';
+  const reply = activityReply(await f.context(general), general, '1');
+  assert.match(reply, /Hay 4 personas en Charla Chill 1/);
+  assert.doesNotMatch(reply, /He visto a Persona 1 conectarse/);
+  const personal = 'cuántos mensajes he enviado hoy';
+  assert.match(activityReply(await f.context(personal), personal, '1'), /Persona 1.*enviar 1 mensaje/);
+  const durationQuestion = 'cuánto tiempo lleva la actividad de mi servidor hoy';
+  assert.match(activityReply(await f.context(durationQuestion), durationQuestion, '1'), /Ahora hay 4 personas/);
+});

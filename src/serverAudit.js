@@ -1,5 +1,8 @@
 const { AuditLogEvent: A, PermissionFlagsBits: P } = require('discord.js');
 const { day, period } = require('./serverActivity');
+const { hourlyQuery } = require('./activityHours');
+const { canReadAudit } = require('./accessPolicy');
+const { BoundedMap } = require('./boundedMap');
 const clean = text => String(text || '').replace(/[\r\n]/g, ' ').slice(0, 180);
 const normalize = text => String(text).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 function auditRequested(text) {
@@ -9,9 +12,10 @@ function auditRequested(text) {
   return /auditoria/.test(q) || /\b(quien|que|cuando|muestra|dime|consulta|resume|ver|hubo|registro|ultim\w*)\b/.test(q) &&
     /ban\w*|kick\w*|expuls\w*|mute\w*|timeout|silenci\w*|ensord\w*|encord\w*|movio|movieron|movimientos|desconecto|desconexiones|entro|entradas|salio|salidas/.test(q);
 }
-function createServerAudit({ activity, now = Date.now, maxPages = 10 }) {
+function createServerAudit({ activity, now = Date.now, maxPages = 10, refreshMs = 30000, requestMs = 10000 }) {
   let sequence = 0;
   const pending = new Map();
+  const refreshed = new BoundedMap(200), requests = new BoundedMap(2000);
   const user = (g, id) => g.members.cache.get(id)?.displayName || id || 'alguien no identificado';
   const channel = (g, id) => g.channels?.cache.get(id)?.name || id || 'un canal no identificado';
   function record(entry, guild) {
@@ -42,21 +46,45 @@ function createServerAudit({ activity, now = Date.now, maxPages = 10 }) {
   }
   async function refresh(g) {
     if (pending.has(g.id)) return pending.get(g.id);
+    const previous = refreshed.get(g.id);
+    if (previous && now() - previous.at < refreshMs) return previous.status;
+    if (pending.size >= 8) return 'Estoy consultando otros registros. Inténtalo en un momento.';
     const task = (async () => {
-      const me = g.members.me || await g.members.fetchMe();
+      const me = await g.members.fetchMe({ force: true });
       if (!me.permissions.has(P.ViewAuditLog)) return 'Me falta el permiso Ver registro de auditoría para consultar las acciones de moderación.';
-      let before;
+      let before, newestId = previous?.newestId;
       for (let page = 0; page < maxPages; page++) {
         const { entries } = await g.fetchAuditLogs({ limit: 100, ...(before ? { before } : {}) });
+        if (!page && entries.size) newestId = entries.first().id;
         for (const entry of entries.values()) await record(entry, g);
-        if (entries.size < 100) return '';
+        // Always reread the newest page: Discord can merge several moves into an existing entry.
+        const reachedSaved = previous?.newestId && (entries.has(previous.newestId) ||
+          (/^\d+$/.test(entries.last()?.id || '') && /^\d+$/.test(previous.newestId) &&
+            BigInt(entries.last().id) <= BigInt(previous.newestId)));
+        if (entries.size < 100 || reachedSaved) {
+          const status = reachedSaved ? previous.coverage || '' : '';
+          refreshed.set(g.id, { at: now(), status, coverage: status, newestId });
+          return status;
+        }
         const last = entries.last();
-        if (last.createdTimestamp < now() - 45 * 86400000) return '';
+        if (last.createdTimestamp < now() - 45 * 86400000) {
+          refreshed.set(g.id, { at: now(), status: '', coverage: '', newestId });
+          return '';
+        }
         if (before === last.id) break;
         before = last.id;
       }
-      return 'Revisé las entradas más recientes; puede haber más acciones antiguas sin consultar.';
+      const status = 'Revisé las entradas más recientes; puede haber más acciones antiguas sin consultar.';
+      refreshed.set(g.id, { at: now(), status, coverage: status, newestId });
+      return status;
     })().catch(() => 'No pude actualizar la auditoría de Discord; solo puedo mostrar lo que tenía guardado.')
+      .then(status => {
+        const current = refreshed.get(g.id);
+        if (!current || current === previous) {
+          refreshed.set(g.id, { ...previous, at: now(), status });
+        }
+        return status;
+      })
       .finally(() => pending.delete(g.id));
     pending.set(g.id, task);
     return task;
@@ -82,15 +110,27 @@ function createServerAudit({ activity, now = Date.now, maxPages = 10 }) {
     }).join(' ');
     return `${actor}: ${A[e.action] || 'acción de auditoría'}${e.targetId ? ` sobre ${target}` : ''}.`;
   }
-  async function reply(g, question, { voice: spoken = false } = {}) {
+  async function reply(g, question, { voice: spoken = false, requesterId } = {}) {
     if (!auditRequested(question)) return null;
     if (!g) return 'Pídeme la auditoría dentro del servidor que quieres consultar.';
-    const status = await refresh(g);
+    if (spoken) return 'Pídeme la auditoría por texto para mostrártela en privado.';
+    if (!requesterId) return 'Necesitas el permiso Ver registro de auditoría para consultar estos datos.';
+    const requestKey = `${g.id}:${requesterId}`, previousRequest = requests.get(requestKey);
+    if (previousRequest !== undefined && now() - previousRequest < requestMs) return 'Espera unos segundos antes de consultar otra vez la auditoría.';
+    requests.set(requestKey, now());
+    try {
+      if (!await canReadAudit(g, requesterId)) return 'Necesitas el permiso Ver registro de auditoría para consultar estos datos.';
+    } catch { return 'No pude comprobar tus permisos para consultar la auditoría. Inténtalo de nuevo.'; }
     const q = normalize(question);
     let from, to;
     try {
-      [from, to] = period(/hoy|ayer|semana|mes|dias|\d{4}-\d{2}-\d{2}/.test(q) ? question : 'histórico', day(now()));
-    } catch { return 'Dime un rango de fechas válido para buscar en el registro.'; }
+      if (hourlyQuery(question, day(now()), day(now()), day(now()))) {
+        return 'Para la auditoría, dime un día completo o un rango de fechas; todavía no filtro este registro por horas.';
+      }
+      const hasPeriod = /hoy|ayer|semana|mes|dias|lunes|martes|miercoles|jueves|viernes|sabado|domingo|hace|horas?|anoche|manana|anos?|enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre|\d{1,4}[-/]\d{1,2}[-/]\d{1,4}/.test(q);
+      [from, to] = period(hasPeriod ? question : 'histórico', day(now()));
+    } catch (error) { return error.code === 'ACTIVITY_PERIOD' ? error.message : 'Dime un rango de fechas válido para buscar en el registro.'; }
+    const status = await refresh(g);
     const mentions = [...question.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
     if (!mentions.length) {
       for (const [id, member] of g.members.cache) {
@@ -111,11 +151,6 @@ function createServerAudit({ activity, now = Date.now, maxPages = 10 }) {
     rows = rows.filter(matches).filter(e => !mentions.length || mentions.includes(e.targetId) || mentions.includes(e.actorId) ||
       (!e.targetId && [A.MemberMove, A.MemberDisconnect].includes(e.action)));
     rows.sort((a, b) => b.at - a.at);
-    if (spoken) {
-      if (status) return status;
-      const first = rows[0] && describe(rows[0], g);
-      return first && first.length <= 280 ? first : rows.length ? 'Encontré varias acciones. Pídemelas por el chat para mostrarte el detalle.' : 'No encuentro acciones de ese tipo en lo que tengo registrado.';
-    }
     return [status, rows.length ? 'Lo más reciente que encontré:\n' + rows.slice(0, 8).map(e => describe(e, g)).join('\n') :
       'No encuentro acciones de ese tipo en lo que tengo registrado.', rows.length > 8 ? 'Te muestro las últimas ocho coincidencias.' : ''].filter(Boolean).join('\n');
   }

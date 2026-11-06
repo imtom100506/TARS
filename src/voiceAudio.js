@@ -1,6 +1,7 @@
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const run = promisify(execFile);
+const { speechText, MAX_CHUNK_CHARS } = require('./speechText');
 
 function wav(pcm, rate = 16000) {
   const header = Buffer.alloc(44);
@@ -95,7 +96,8 @@ function createVoiceAudio({ env = process.env, budget, fetchImpl = global.fetch,
     return typeof data.text === 'string' ? data.text.trim().slice(0, 800) : '';
   }
   async function synthesize(text, signal) {
-    const spoken = text.replace(/https?:\/\/\S+/g, '').replace(/[*_`#<>]/g, '').slice(0, 280);
+    const spoken = speechText(text);
+    if (!spoken || spoken.length > MAX_CHUNK_CHARS) throw new RangeError('La síntesis requiere un fragmento de 1 a 280 caracteres.');
     if (env.TARS_TTS_ENGINE !== 'espeak' && !neuralFailed && !warming) {
       try {
         return await neural.synthesize(spoken, signal);

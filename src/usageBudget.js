@@ -2,18 +2,31 @@
 function createUsageBudget({ store, now = Date.now, dailyRequests = 500, dailyTokens = 100000,
   dailyAudio = 3600, minuteRequests = 6, sttMinuteRequests = minuteRequests } = {}) {
   let entries, queue = Promise.resolve();
+  async function load() {
+    if (!store) throw new Error('Falta almacenamiento de cuota');
+    if (entries) return;
+    const raw = await store.read();
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed) || parsed.some(e => !Number.isFinite(e.time) || !Number.isFinite(e.tokens) || !Number.isFinite(e.audio) || e.tokens < 0 || e.audio < 0)) throw new Error('Registro de cuota inválido');
+    entries = parsed;
+  }
+  function check() {
+    const task = queue.then(async () => {
+      await load();
+      const next = entries.filter(e => now() - e.time < 86400000);
+      await store.write(JSON.stringify(next));
+      entries = next;
+    });
+    queue = task.catch(() => {});
+    return task;
+  }
   function reserve({ tokens = 0, audio = 0 } = {}) {
     const scope = audio > 0 ? 'stt' : 'llm';
     const queuedAt = now();
     const task = queue.then(async () => {
       if (!store) throw new Error('Falta almacenamiento de cuota');
       if (!Number.isFinite(tokens) || !Number.isFinite(audio) || tokens < 0 || audio < 0) throw new Error('Reserva inválida');
-      if (!entries) {
-        const raw = await store.read();
-        const parsed = raw ? JSON.parse(raw) : [];
-        if (!Array.isArray(parsed) || parsed.some(e => !Number.isFinite(e.time) || !Number.isFinite(e.tokens) || !Number.isFinite(e.audio) || e.tokens < 0 || e.audio < 0)) throw new Error('Registro de cuota inválido');
-        entries = parsed;
-      }
+      await load();
       const time = now();
       entries = entries.filter(e => time - e.time < 86400000);
       const minute = entries.filter(e => time - e.time < 60000);
@@ -79,6 +92,6 @@ function createUsageBudget({ store, now = Date.now, dailyRequests = 500, dailyTo
       tokens_contabilizados: used, limite_tokens: dailyTokens };
   }
   function logStatus() { console.info('[IA:saldo]', JSON.stringify(status())); }
-  return { reserve, status, logStatus };
+  return { reserve, status, logStatus, check };
 }
 module.exports = { createUsageBudget };

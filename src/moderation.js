@@ -1,6 +1,6 @@
 const { PermissionFlagsBits } = require("discord.js");
 const { mentionedUserId } = require("./commandUtils");
-const { VOICE_ROLES } = require("./botCapabilities");
+const { hasModeratorRole } = require("./accessPolicy");
 
 const MAX_MUTE = 28 * 24 * 60 * 60 * 1000;
 const USAGE = "Usa `!tars mutea a @usuario por 10 minutos`, `!tars desmutea a @usuario`, " +
@@ -55,8 +55,8 @@ async function moderate(ctx, action, sendLog, textMutes) {
     const isNickname = action.type === "nickname";
     const permission = isNickname ? PermissionFlagsBits.ManageNicknames : PermissionFlagsBits.ModerateMembers;
     const permissionName = isNickname ? "Gestionar apodos" : "Moderar miembros";
-    if (!actor.roles.cache.some(role => VOICE_ROLES.includes(role.name))) {
-      return deny(`Necesitas el rol ${VOICE_ROLES.join(" o ")} para usar esta función.`);
+    if (ctx.user.id !== ctx.guild.ownerId && !hasModeratorRole(actor, ctx.guild.id)) {
+      return deny("Necesitas un rol de moderación autorizado para usar esta función.");
     }
     if (!actor.permissions.has(permission)) return deny(`Necesitas el permiso «${permissionName}».`);
     const target = await ctx.guild.members.fetch({ user: action.targetId, force: true });

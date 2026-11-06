@@ -127,6 +127,7 @@ function createTextMutes({ file = path.join(process.env.TARS_DATA_DIR || path.jo
   async function sweep(client, log = async () => {}) {
     return serial(async () => {
       await load();
+      let healthy = true;
       for (const record of [...records]) {
         if (!record.restoring && record.expiresAt > now()) continue;
         try {
@@ -134,9 +135,11 @@ function createTextMutes({ file = path.join(process.env.TARS_DATA_DIR || path.jo
           await restore(record, guild, "Fin del mute de texto de TARS");
           await log("mute_texto_finalizado", { usuario_id: record.userId, servidor_id: record.guildId });
         } catch (error) {
-          await log("mute_texto_error", { usuario_id: record.userId, codigo: error.code || "restauracion pendiente" });
+          healthy = false;
+          await log("mute_texto_error", { servidor_id: record.guildId, usuario_id: record.userId, codigo: error.code || "restauracion pendiente" });
         }
       }
+      return healthy;
     });
   }
   async function syncChannel(channel) {

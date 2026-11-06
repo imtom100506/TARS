@@ -1,0 +1,42 @@
+name: Calidad y seguridad
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run check
+      - run: npm run test:coverage
+      - run: npm audit --omit=dev --audit-level=low
+
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Construir contenedor con modelos verificados
+        run: docker build --pull -t tars-ci .
+      - name: Verificar modelos y escritura sin privilegios ni conexión de red
+        run: docker run --rm --network none --memory 2g --cpus 2 tars-ci node scripts/smoke-runtime.js

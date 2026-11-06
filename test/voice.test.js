@@ -100,11 +100,13 @@ function fixture(overrides = {}) {
   const channel = { id: 'voice', type: 2, guild, permissionsFor: () => ({ has: () => true }), members: new Map([['human', { user: { bot: false } }]]) };
   const ctx = { guild, user: { id: 'human' }, channel: { send: async value => replies.push(value.content) }, reply: async value => replies.push(value) };
   const voice = createVoice({ enabled: true, client: { user: { id: 'bot' } }, api,
+    allowRequest: overrides.allowRequest,
     wakeFactory: overrides.wakeFactory,
     getContext: overrides.getContext,
+    getAuditReply: overrides.getAuditReply,
     recordConversation: overrides.recordConversation, sendLog: (event, data) => logs.push({event, ...data}),
     askAI: overrides.askAI || (async () => { throw Error('not expected'); }), decoderFactory: () => new PassThrough(),
-    audio: { countdown: overrides.countdown || (async () => Buffer.from('countdown')), check: overrides.check || (async () => {}), synthesize: async () => Buffer.from('wav'), transcribe: overrides.transcribe || (async pcm => { transcriptions++; assert.ok(pcm.length <= MAX_AUDIO_BYTES); return ''; }) },
+    audio: { countdown: overrides.countdown || (async () => Buffer.from('countdown')), check: overrides.check || (async () => {}), synthesize: overrides.synthesize || (async () => Buffer.from('wav')), transcribe: overrides.transcribe || (async pcm => { transcriptions++; assert.ok(pcm.length <= MAX_AUDIO_BYTES); return ''; }) },
     now: () => time, setTimer: (fn, delay) => { const timer = { fn, deadline: time + delay }; timers.add(timer); return timer; },
     clearTimer: timer => timers.delete(timer) });
   async function advance(ms) {
@@ -126,8 +128,9 @@ test('no background reception and leaves at five minutes', async () => {
 test('spoken questions receive activity for their own guild and requesting user', async () => {
   let options;
   const f = fixture({ transcribe: async () => '¿Cómo va la actividad?',
-    getContext: async (guild, question, userId) => {
+    getContext: async (guild, question, userId, responseChannelId) => {
       assert.equal(guild.id, 'guild'); assert.equal(userId, 'human'); assert.match(question, /actividad/);
+      assert.equal(responseChannelId, 'voice');
       return 'Hoy: 5 participantes en voz.';
     }, askAI: async (_, __, value) => { options = value; return 'Cinco participantes.'; } });
   await f.voice.handle(f.ctx, 'entrar');
@@ -136,7 +139,117 @@ test('spoken questions receive activity for their own guild and requesting user'
   f.capture.end(Buffer.alloc(16000));
   await pending;
   assert.equal(options.context, 'Hoy: 5 participantes en voz.');
+  assert.equal(options.conversationId, 'voice:guild:voice');
   f.voice.leave();
+});
+
+test('spoken audit queries carry the requester and response channel for authorization', async () => {
+  let received;
+  const f = fixture({ transcribe: async () => 'Quién hizo kick', getAuditReply: async (guild, question, options) => {
+    received = options; assert.equal(guild.id, 'guild'); assert.match(question, /kick/); return 'Solo personal autorizado.';
+  } });
+  await f.voice.handle(f.ctx, 'entrar');
+  const pending = f.voice.handle(f.ctx, 'escuchar'); await f.advance(0);
+  f.capture.end(Buffer.alloc(16000)); await pending;
+  assert.deepEqual(received, { voice: true, requesterId: 'human', channelId: 'voice' });
+  f.voice.leave();
+});
+
+test('long replies play every bounded chunk and log exactly the spoken sanitized text', async () => {
+  const { speechText } = require('../src/speechText');
+  const answer = '**Primera frase.** ' + 'Esta explicación tiene detalles que deben escucharse completos. '.repeat(8) + 'Última aclaración importante.';
+  const synthesized = [], records = [];
+  const f = fixture({ transcribe: async () => 'Explica algo', askAI: async () => answer,
+    synthesize: async text => { synthesized.push(text); return Buffer.from('wav'); },
+    recordConversation: record => records.push(record) });
+  await f.voice.handle(f.ctx, 'entrar');
+  const pending = f.voice.handle(f.ctx, 'escuchar'); await f.advance(0);
+  f.capture.end(Buffer.alloc(16000)); await pending;
+  assert.ok(synthesized.length > 1);
+  assert.ok(synthesized.every(text => text.length <= 280));
+  assert.equal(synthesized.join(' '), speechText(answer));
+  assert.equal(f.plays.length, synthesized.length);
+  assert.equal(records.find(row => row.role === 'assistant').text, synthesized.join(' '));
+  assert.ok(records.at(-1).text.endsWith('Última aclaración importante.'));
+  f.voice.leave();
+});
+
+test('if a later chunk fails, only completed playback is recorded', async () => {
+  const records = [], synthesized = [];
+  const answer = 'Frase completa para escuchar. '.repeat(18);
+  const f = fixture({ transcribe: async () => 'Explica algo', askAI: async () => answer,
+    synthesize: async text => { synthesized.push(text); if (synthesized.length === 2) throw Error('failed synthesis'); return Buffer.from('wav'); },
+    recordConversation: row => records.push(row) });
+  await f.voice.handle(f.ctx, 'entrar');
+  const pending = f.voice.handle(f.ctx, 'escuchar'); await f.advance(0);
+  f.capture.end(Buffer.alloc(16000)); await pending;
+  assert.equal(f.plays.length, 1);
+  assert.equal(records.find(row => row.role === 'assistant').text, synthesized[0]);
+  f.voice.leave();
+});
+
+test('priority controls do not subscribe to or transcribe bystanders while responding', async () => {
+  let release, transcriptions = 0;
+  const f = fixture({ transcribe: async () => { transcriptions++; return 'Explica algo'; },
+    askAI: () => new Promise(resolve => { release = () => resolve('Terminado.'); }) });
+  await f.voice.handle(f.ctx, 'entrar');
+  const member = await f.ctx.guild.members.fetch();
+  member.voice.channel.members.set('bystander', { user: { bot: false } });
+  const pending = f.voice.handle(f.ctx, 'escuchar'); await f.advance(0);
+  f.capture.end(Buffer.alloc(16000)); await f.advance(0);
+  assert.equal(transcriptions, 1);
+  f.receiver.speaking.emit('start', 'bystander'); await f.advance(0);
+  assert.equal(f.subscriptions, 1);
+  assert.equal(transcriptions, 1);
+  release(); await pending; f.voice.leave();
+});
+
+test('audio synthesis rejects overlong chunks instead of silently dropping text', async () => {
+  let calls = 0;
+  const audio = createVoiceAudio({ env: { TARS_TTS_ENGINE: 'espeak' }, runImpl: async () => { calls++; return { stdout: Buffer.from('wav') }; } });
+  await assert.rejects(audio.synthesize('a'.repeat(281), new AbortController().signal), RangeError);
+  assert.equal(calls, 0);
+});
+
+test('manual requests are limited before capture or STT and recover after a minute', async () => {
+  const f = fixture(); await f.voice.handle(f.ctx, 'entrar');
+  for (let i = 0; i < 6; i++) {
+    const pending = f.voice.handle(f.ctx, 'escuchar'); await f.advance(0);
+    f.capture.end(Buffer.alloc(16000)); await pending; await f.advance(0);
+  }
+  await f.voice.handle(f.ctx, 'escuchar');
+  assert.equal(f.subscriptions, 6); assert.equal(f.transcriptions, 6);
+  assert.match(f.replies.at(-1), /Dame un momento/);
+  await f.advance(60000);
+  const pending = f.voice.handle(f.ctx, 'escuchar'); await f.advance(0);
+  f.capture.end(Buffer.alloc(16000)); await pending;
+  assert.equal(f.transcriptions, 7); f.voice.leave();
+});
+
+test('wake cannot bypass request limits and discards transferred audio without STT', async () => {
+  let decisions = 0;
+  const f = fixture({ allowRequest: (userId, guildId) => {
+    assert.equal(userId, 'human'); assert.equal(guildId, 'guild'); decisions++; return false;
+  }, wakeFactory: () => ({ frameLength: 2, process: () => 0, release() {} }) });
+  await f.voice.handle(f.ctx, 'entrar');
+  f.receiver.speaking.emit('start', 'human'); const input = f.capture;
+  input.end(Buffer.from([42, 0, 0, 0, 7, 8])); await f.advance(0);
+  assert.equal(decisions, 1); assert.equal(f.transcriptions, 0); assert.equal(input.destroyed, true);
+  assert.match(f.replies.at(-1), /Dame un momento/); f.voice.leave();
+});
+
+test('priority transcription shares the request limit and manual exit remains available', async () => {
+  let calls = 0, release;
+  const f = fixture({ allowRequest: () => ++calls === 1,
+    transcribe: async () => 'Explica algo',
+    askAI: () => new Promise(resolve => { release = () => resolve('Terminado.'); }) });
+  await f.voice.handle(f.ctx, 'entrar');
+  const pending = f.voice.handle(f.ctx, 'escuchar'); await f.advance(0);
+  f.capture.end(Buffer.alloc(16000)); await f.advance(0);
+  f.receiver.speaking.emit('start', 'human'); await f.advance(0);
+  assert.equal(f.subscriptions, 1); assert.equal(calls, 2);
+  await f.voice.handle(f.ctx, 'salir'); release(); await pending;
+  assert.equal(f.destroyed, 1);
 });
 
 test('spoken activity report preserves measured facts without invoking the model', async () => {

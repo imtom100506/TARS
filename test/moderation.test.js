@@ -1,3 +1,4 @@
+process.env.TARS_MODERATOR_ROLE_IDS = "moderator-role";
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { PermissionFlagsBits: P } = require("discord.js");
@@ -6,7 +7,7 @@ const { parseDuration, parseModeration, moderate } = require("../src/moderation"
 function fixture(options = {}) {
   const calls = [], replies = [], logs = [], fetches = [];
   const actor = {
-    roles: { cache: { some: predicate => options.role !== false && predicate({ name: "Sigma" }) },
+    roles: { cache: { some: predicate => options.role !== false && predicate({ id: options.roleId || "moderator-role", name: "Sigma" }) },
       highest: { comparePositionTo: () => options.position ?? 1 } },
     permissions: { has: permission => options.actorPermission !== false && [P.ManageNicknames, P.ModerateMembers].includes(permission) },
   };
@@ -77,7 +78,7 @@ test("text mute, removal and nickname actions call their services once with audi
 });
 
 test("roles, permissions, actor and bot hierarchy prevent unauthorized mutations", async () => {
-  for (const options of [{ role: false }, { actorPermission: false }, { botPermission: false },
+  for (const options of [{ role: false }, { roleId: "same-name-untrusted" }, { actorPermission: false }, { botPermission: false },
     { position: 0 }, { position: -1 }, { manageable: false }, { targetId: "1" }, { targetId: "owner" }]) {
     for (const text of ["mute <@123> 10m", "desmutea <@123>", "apodo <@123> Nuevo"]) {
       const f = fixture(options);
@@ -91,7 +92,7 @@ test("roles, permissions, actor and bot hierarchy prevent unauthorized mutations
     await f.run("mute <@123> 10m");
     assert.equal(f.calls.length, 0);
   }
-  const owner = fixture({ ownerId: "1", position: -1 });
+  const owner = fixture({ ownerId: "1", role: false, position: -1 });
   await owner.run("mute <@123> 10m");
   assert.equal(owner.calls.length, 1);
 });

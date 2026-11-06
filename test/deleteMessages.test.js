@@ -1,3 +1,4 @@
+process.env.TARS_MODERATOR_ROLE_IDS = 'moderator-role';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { parseDelete, deleteMessages, confirmDelete } = require('../src/deleteMessages');
@@ -6,7 +7,7 @@ function fixture() {
   const replies = [], deleted = [], logs = []; let time = 2000000000, role = true, allowed = true, clear = 0;
   const rows = new Map(Array.from({ length: 100 }, (_, i) => [String(i), { id: String(i), createdTimestamp: time - i * 1000, author: { id: i % 2 ? '2' : '1' }, content: 'text' }]));
   const ctx = { user: { id: '1' }, messageId: 'command',
-    guild: { id: 'guild', members: { fetch: async () => ({ roles: { cache: { some: () => role } } }), fetchMe: async () => ({ id: 'bot' }) } },
+    guild: { id: 'guild', members: { fetch: async () => ({ roles: { cache: { some: predicate => role && predicate({ id: 'moderator-role', name: 'Sigma' }) } } }), fetchMe: async () => ({ id: 'bot' }) } },
     channel: { id: String(++sequence), permissionsFor: () => ({ has: () => allowed }),
       messages: { fetch: async options => { assert.equal(options.before, 'command'); return rows; } },
       bulkDelete: async ids => { deleted.push(ids); return new Map(ids.map(id => [id, rows.get(id)])); } },

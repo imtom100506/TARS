@@ -1,7 +1,10 @@
+function asksAboutSelf(q) {
+  return /\byo\b|\bmi\s+(?:actividad|tiempo|participacion)\b|\bmis\s+(?:conexiones|mensajes|sesiones|horas|minutos)\b|\bhe\s+(?:estado|participado|escrito|enviado|entrado|hablado|usado)\b|\bme\s+(?:he\s+)?conect\w*/.test(q);
+}
 function naturalActivity(data, q, requesterId, voice) {
   const s = data.periodoConsultado || data.hoy, sentences = [];
   const mentions = [...q.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
-  const self = /\b(yo|mi|mis|he)\b/.test(q);
+  const self = asksAboutSelf(q);
   const normalize = text => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   const targets = s.consultados.filter(u => mentions.length ? mentions.includes(u.id) : self ? u.id === requesterId : q.includes(normalize(u.usuario)));
   const leader = () => {
@@ -41,4 +44,4 @@ function naturalActivity(data, q, requesterId, voice) {
   }
   return spoken || 'Tengo el detalle de la actividad; pídemelo por el chat para verlo completo.';
 }
-module.exports = { naturalActivity };
+module.exports = { naturalActivity, asksAboutSelf };

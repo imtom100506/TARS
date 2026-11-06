@@ -1,6 +1,6 @@
 // Metric answers are rendered from counters, not rewritten or rounded by an LLM.
 const normalize = text => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-const { naturalActivity } = require('./naturalActivity');
+const { naturalActivity, asksAboutSelf } = require('./naturalActivity');
 const { isActivityQuestion } = require('./activityQuery');
 function duration(ms) {
   if (ms > 0 && ms < 1000) return 'menos de 1 s';
@@ -29,15 +29,10 @@ function activityReply(context, question, requesterId, { voice = false } = {}) {
   if (!/tiempo|duracion|horas?|minutos?|segundos?|cuanto llev|por dia|al dia|diari/.test(q)) {
     return naturalActivity(data, q, requesterId, voice);
   }
-  const timestamp = new Intl.DateTimeFormat('es-CL', { timeZone: 'America/Santiago',
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
-  const since = timestamp.format(new Date(data.cobertura.registroDesde));
   const coverage = 'Esto es lo que he visto; puede faltar actividad anterior.';
   const unknown = data.cobertura.sesionesActualesConInicioDesconocido;
-  const start = unknown ? ` ${unknown} sesiones actuales ya estaban abiertas al observarlas: su duración real es desconocida.` : '';
-  const range = stats.desde === stats.hasta ? stats.desde : `${stats.desde} a ${stats.hasta}`;
   const mentioned = [...question.matchAll(/<@!?(\d+)>/g)].map(m => m[1]);
-  const self = /\b(yo|mi|mis|he)\b/.test(q);
+  const self = asksAboutSelf(q);
   const targets = stats.consultados.filter(u => mentioned.length ? mentioned.includes(u.id) : self ? u.id === requesterId :
     q.includes(normalize(u.usuario)));
   let detail, spokenDetail;
