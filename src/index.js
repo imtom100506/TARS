@@ -16,6 +16,7 @@ const { createVoiceLog } = require('./voiceLog');
 const { deleteMessages, confirmDelete } = require('./deleteMessages');
 const { createServerActivity, MARKER: ACTIVITY_MARKER } = require('./serverActivity');
 const { activityReply } = require('./activityReply');
+const { isActivityQuestion } = require('./activityQuery');
 const { createServerAudit, auditRequested } = require('./serverAudit');
 
 const client = new Client({
@@ -153,7 +154,7 @@ function getServerContext(guild) {
 }
 
 async function getActivityContext(guild, question, requesterId) {
-  if (!guild) return '';
+  if (!guild || !isActivityQuestion(question)) return '';
   try { return await activity.context(guild, question, requesterId); }
   catch (error) { activityError(error); return 'Estadísticas de actividad no disponibles por un error del registro. No inventes cifras.'; }
 }
@@ -234,7 +235,7 @@ async function execute(ctx, command, argument) {
   }
   if (!text) return ctx.reply("Escribe algo después de `!tars`");
   void sendLog("mensaje", { usuario: ctx.user.username, canal: ctx.channel.name || "privado", mensaje: text });
-  const serverContext = getServerContext(ctx.guild);
+  const serverContext = isActivityQuestion(text) ? getServerContext(ctx.guild) : '';
   const recent = channelContext.get(ctx.channel.id) || [];
   const activityContext = await getActivityContext(ctx.guild, text, ctx.user.id);
   const response = activityReply(activityContext, text, ctx.user.id) || await askAI(ctx.user.id, text, {

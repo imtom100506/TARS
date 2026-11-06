@@ -1,5 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { HOUR, hourKey, hourLabel, hourlyQuery } = require('./activityHours');
 
 const MARKER = 'TARS · Actividad del servidor · No borrar';
 const zone = 'America/Santiago';
@@ -50,16 +51,21 @@ function createServerActivity({ store, now = Date.now,
     const parsed = raw ? JSON.parse(raw) : { version: 1, guilds: {} };
     const object = value => value && typeof value === 'object' && !Array.isArray(value);
     const count = value => Number.isFinite(value) && value >= 0;
+    const validBucket = b => object(b) && count(b.joins) && count(b.leaves) && object(b.users) && Object.values(b.users).every(u =>
+      object(u) && typeof u.voice === 'boolean' && ['connections', 'voiceMs', 'messages', 'attachments'].every(k => count(u[k])));
     if (parsed.version !== 1 || !object(parsed.guilds) || !Object.values(parsed.guilds).every(g =>
-      count(g.since) && (g.events === undefined || Array.isArray(g.events) && g.events.every(e => object(e) && typeof e.id === 'string' && count(e.at))) && object(g.days) && Object.values(g.days).every(b =>
-        count(b.joins) && count(b.leaves) && object(b.users) && Object.values(b.users).every(u =>
-          typeof u.voice === 'boolean' && ['connections', 'voiceMs', 'messages', 'attachments'].every(k => count(u[k])))))) {
+      object(g) && count(g.since) && (g.events === undefined || Array.isArray(g.events) && g.events.every(e => object(e) && typeof e.id === 'string' && count(e.at))) && object(g.days) && Object.values(g.days).every(validBucket) &&
+      (g.hourlySince === undefined || count(g.hourlySince)) &&
+      (g.hours === undefined || object(g.hours) && Object.entries(g.hours).every(([key, b]) => count(Number(key)) && Number(key) % HOUR === 0 && validBucket(b))))) {
       throw Error('Registro de actividad inválido; no se sobrescribe.');
     }
     data = parsed;
   }
   function guild(id, time = now()) {
-    return data.guilds[id] ||= { since: time, days: {} };
+    const g = data.guilds[id] ||= { since: time, days: {} };
+    g.hours ||= {};
+    g.hourlySince ??= time;
+    return g;
   }
   function bucket(id, date) {
     return guild(id).days[date] ||= { users: {}, joins: 0, leaves: 0 };
@@ -67,21 +73,30 @@ function createServerActivity({ store, now = Date.now,
   function user(id, date, uid) {
     return bucket(id, date).users[uid] ||= { connections: 0, voiceMs: 0, voice: false, messages: 0, attachments: 0 };
   }
+  function hourlyBucket(id, time) {
+    return guild(id).hours[hourKey(time)] ||= { users: {}, joins: 0, leaves: 0 };
+  }
+  function hourlyUser(id, time, uid) {
+    return hourlyBucket(id, time).users[uid] ||= { connections: 0, voiceMs: 0, voice: false, messages: 0, attachments: 0 };
+  }
   function accrue(session, end) {
     let start = session.at;
     if (end <= start) return;
     while (start < end) {
       const date = day(start);
-      let boundary = end;
-      if (day(end - 1) !== date) {
+      let boundary = Math.min(end, hourKey(start) + HOUR);
+      if (day(boundary - 1) !== date) {
         // Search local midnight, including the 23/25-hour days at DST changes.
-        let lo = start + 1, hi = end;
+        let lo = start + 1, hi = boundary;
         while (lo < hi) { const mid = Math.floor((lo + hi) / 2); if (day(mid) === date) lo = mid + 1; else hi = mid; }
         boundary = lo;
       }
       const row = user(session.guildId, date, session.userId);
       row.voice = true;
       row.voiceMs += boundary - start;
+      const hourly = hourlyUser(session.guildId, start, session.userId);
+      hourly.voice = true;
+      hourly.voiceMs += boundary - start;
       start = boundary;
     }
     session.at = end;
@@ -103,6 +118,7 @@ function createServerActivity({ store, now = Date.now,
       if (!sessions.has(k)) {
         sessions.set(k, { guildId: g.id, userId: state.id, at: now(), observedSince: now(), unknownStart: true });
         user(g.id, day(now()), state.id).voice = true;
+        hourlyUser(g.id, now(), state.id).voice = true;
       }
     }
   }
@@ -132,9 +148,11 @@ function createServerActivity({ store, now = Date.now,
         if (active) accrue(active, time);
         if (!newState.channelId) { sessions.delete(k); return; }
         const row = user(gid, day(time), uid);
+        const hourly = hourlyUser(gid, time, uid);
         row.voice = true;
+        hourly.voice = true;
         // Moves, mute/deafen changes and sessions already active at startup are not connections.
-        if (!oldState.channelId) row.connections++;
+        if (!oldState.channelId) { row.connections++; hourly.connections++; }
         sessions.set(k, { guildId: gid, userId: uid, at: time,
           observedSince: active?.observedSince ?? time, unknownStart: active?.unknownStart ?? !!oldState.channelId });
       });
@@ -146,22 +164,30 @@ function createServerActivity({ store, now = Date.now,
         const row = user(message.guild.id, day(time), message.author.id);
         row.messages++;
         row.attachments += message.attachments?.size || 0;
+        const hourly = hourlyUser(message.guild.id, time, message.author.id);
+        hourly.messages++;
+        hourly.attachments += message.attachments?.size || 0;
       });
     },
     member: (member, joined) => {
       const time = now();
-      return serial(() => { if (!member.user.bot) bucket(member.guild.id, day(time))[joined ? 'joins' : 'leaves']++; });
+      return serial(() => { if (!member.user.bot) {
+        bucket(member.guild.id, day(time))[joined ? 'joins' : 'leaves']++;
+        hourlyBucket(member.guild.id, time)[joined ? 'joins' : 'leaves']++;
+      } });
     },
     context: (g, question = '', requesterId) => serial(() => {
       if (!g) return '';
       const time = now();
       checkpoint(time);
       const record = guild(g.id), today = day(time), [from, to] = period(question, today);
-      function summarize(start, end) {
+      const hourly = hourlyQuery(question, from, to, today);
+      function summarize(start, end, hours = false) {
         const users = {}, daily = [];
         let joins = 0, leaves = 0;
-        for (const [date, b] of Object.entries(record.days).sort()) {
-          if (date < start || date > end) continue;
+        for (const [key, b] of Object.entries(hours ? record.hours : record.days).sort()) {
+          const date = hours ? hourLabel(Number(key)) : key;
+          if (date < start || (hours ? date >= end : date > end)) continue;
           let connections = 0, voiceUsers = 0;
           joins += b.joins; leaves += b.leaves;
           for (const [uid, row] of Object.entries(b.users)) {
@@ -170,7 +196,10 @@ function createServerActivity({ store, now = Date.now,
             u.voice ||= row.voice;
             connections += row.connections; voiceUsers += Number(row.voice);
           }
-          daily.push({ fecha: date, conexiones: connections, usuariosVoz: voiceUsers });
+          daily.push({ fecha: date, conexiones: connections, usuariosVoz: voiceUsers,
+            ...(hours ? { hora: `${date.replace('T', ' ')}:00`, inicioUTC: new Date(Number(key)).toISOString(),
+              mensajes: Object.values(b.users).reduce((n, u) => n + u.messages, 0),
+              vozMs: Object.values(b.users).reduce((n, u) => n + u.voiceMs, 0) } : {}) });
         }
         const rows = Object.values(users);
         const maxVoice = rows.reduce((max, u) => Math.max(max, u.voiceMs), 0);
@@ -192,6 +221,7 @@ function createServerActivity({ store, now = Date.now,
           topConexiones: rows.filter(u => u.connections).sort((a, b) => b.connections - a.connections).slice(0, 3).map(label),
           topTexto: rows.filter(u => u.messages).sort((a, b) => b.messages - a.messages).slice(0, 3).map(label),
           consultados: target.slice(0, 5).map(label),
+          ...(hours ? { horas: daily.slice(-24) } : {}),
           ...(/dia|diari/i.test(question) ? { ultimosDiasRegistrados: daily.slice(-14), diasRegistrados: daily.length } : {}),
         };
       }
@@ -213,7 +243,10 @@ function createServerActivity({ store, now = Date.now,
           id: s.id, usuario: s.member.displayName || s.id, canal: s.channel?.name || s.channelId,
           inicioRealConocido: sessions.get(key(g.id, s.id))?.unknownStart === false,
           observadoDesde: sessions.get(key(g.id, s.id))?.observedSince ?? null,
-        })), hoy: summarize(today, today), ...(from !== today || to !== today ? { periodoConsultado: summarize(from, to) } : {}) });
+        })), hoy: summarize(today, today), ...(from !== today || to !== today ? { periodoConsultado: summarize(from, to) } : {}),
+          ...(hourly ? { consultaHoraria: { ...hourly, registroDesde: record.hourlySince,
+            parcial: hourly.start < hourLabel(record.hourlySince) || hourly.start === hourLabel(record.hourlySince) && record.hourlySince % HOUR !== 0 },
+            ...(!hourly.error ? { periodoConsultado: summarize(hourly.start, hourly.end, true) } : {}) } : {}) });
     }),
   };
 }

@@ -33,7 +33,8 @@ o acentos; `/escuchar` permite invocarlo manualmente.
 
 ## Consumo y diagnóstico
 
-TARS recibe estadísticas de actividad al conversar por `!tars`, `/tars` o voz,
+TARS recibe estadísticas solo cuando la pregunta actual solicita actividad por `!tars`, `/tars` o voz;
+los saludos y la charla casual reciben respuestas naturales sin reportes automáticos. Registra actividad
 sin comandos adicionales y aunque la escucha de voz esté desactivada. Registra
 conexiones a voz, participantes únicos, minutos en voz (no minutos hablando),
 rankings por duración y conexiones, mensajes, adjuntos e ingresos/salidas de
@@ -72,10 +73,21 @@ hoy, ayer, anteayer, últimos N días, esta semana, este mes e histórico. Los r
 muestran los primeros tres; los desgloses diarios muestran hasta los últimos 14
 días con registros del período. Los totales usan todo el período registrado.
 
+También admite «actividad hoy por hora», «actividad ayer de 20:00 a 23:00»,
+«actividad 2026-11-05 a las 21» y «¿cómo estuvo la actividad anoche?».
+Las franjas usan horas completas, inicio incluido y fin excluido. «Anoche» significa
+20:00 del día anterior a 06:00 de hoy, siempre en America/Santiago, y se indica
+explícitamente al responder. El desglose muestra hasta las últimas 24 horas con
+registros del período; el total incluye toda la franja. Las horas repetidas por
+cambio de horario se guardan separadas (con inicio UTC) aunque compartan etiqueta local.
+El detalle horario empieza al desplegar esta versión: los totales diarios anteriores
+se conservan, pero no se reparten artificialmente entre horas. Las consultas se
+responden en el canal donde se hacen; no se envían informes periódicos automáticamente.
+
 Las cifras comienzan al activar esta versión: no reconstruyen actividad anterior
 ni eventos perdidos mientras el bot está desconectado. Las sesiones abiertas al
 arrancar se miden desde ese momento sin inventar una conexión. Guarda agregados
-por servidor, usuario y día cada minuto y al apagarse; una caída abrupta puede
+por servidor, usuario, día y hora cada minuto y al apagarse; una caída abrupta puede
 perder hasta el último intervalo sin guardar. No almacena contenido de mensajes
 ni audio en este registro. Usa un archivo adjunto de estado separado en
 `TARS_STATE_CHANNEL_ID` o `LOG_CHANNEL_ID`, protegido frente a `!borrar`; sin canal

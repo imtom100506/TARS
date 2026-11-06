@@ -101,3 +101,45 @@ test('period selection supports history, relative days and explicit inclusive ra
   assert.throws(() => period('2026-02-30', '2026-11-05'));
   assert.throws(() => period('2026-11-05 a 2026-11-01', '2026-11-05'));
 });
+
+test('hourly counters split sessions and select last night rather than today', async () => {
+  const f = fixture();
+  f.set('2026-11-06T02:30:00Z'); // Nov 5, 23:30 Chile
+  await f.tracker.voice(f.state(null), f.state('a'));
+  await f.tracker.message({ guild: f.g, author: { id: 'u' } });
+  f.advance(3600000);
+  await f.tracker.voice(f.state('a'), f.state(null));
+  f.set('2026-11-06T15:00:00Z');
+  await f.tracker.message({ guild: f.g, author: { id: 'v' } });
+  const stats = await f.stats('actividad anoche por hora');
+  assert.equal(stats.periodoConsultado.mensajes, 1);
+  assert.equal(stats.periodoConsultado.vozMs, 3600000);
+  assert.deepEqual(stats.periodoConsultado.horas.map(r => r.vozMs), [1800000, 1800000]);
+  assert.equal(stats.hoy.mensajes, 1);
+  const range = await f.stats('actividad ayer de 23 a 24');
+  assert.equal(range.periodoConsultado.vozMs, 1800000);
+  assert.equal(range.periodoConsultado.conexiones, 1);
+  await f.tracker.flush();
+  const next = fixture(f.raw()); next.set('2026-11-06T15:00:00Z');
+  assert.equal((await next.stats('actividad anoche')).periodoConsultado.vozMs, 3600000);
+});
+
+test('legacy daily totals are preserved but never invented as hourly history', async () => {
+  const f = fixture();
+  await f.tracker.message({ guild: f.g, author: { id: 'u' } }); await f.tracker.flush();
+  const legacy = JSON.parse(f.raw()); delete legacy.guilds.g.hours; delete legacy.guilds.g.hourlySince;
+  const next = fixture(JSON.stringify(legacy)); next.advance(3600000);
+  const stats = await next.stats('actividad hoy por hora');
+  assert.equal(stats.hoy.mensajes, 1);
+  assert.equal(stats.periodoConsultado.mensajes, 0);
+  assert.equal(stats.consultaHoraria.parcial, true);
+});
+
+test('repeated Chilean DST hour has separate buckets without lost or doubled voice time', async () => {
+  const f = fixture(); f.set('2026-04-05T02:30:00Z');
+  await f.tracker.voice(f.state(null), f.state('a')); f.advance(3600000);
+  const stats = await f.stats('actividad 2026-04-04 por hora');
+  assert.equal(stats.periodoConsultado.vozMs, 3600000);
+  assert.equal(stats.periodoConsultado.horas.length, 2);
+  assert.notEqual(stats.periodoConsultado.horas[0].inicioUTC, stats.periodoConsultado.horas[1].inicioUTC);
+});

@@ -1,6 +1,7 @@
 // Metric answers are rendered from counters, not rewritten or rounded by an LLM.
 const normalize = text => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const { naturalActivity } = require('./naturalActivity');
+const { isActivityQuestion } = require('./activityQuery');
 function duration(ms) {
   if (ms > 0 && ms < 1000) return 'menos de 1 s';
   const seconds = Math.floor(ms / 1000);
@@ -9,9 +10,7 @@ function duration(ms) {
 }
 function activityReply(context, question, requesterId, { voice = false } = {}) {
   const q = normalize(question);
-  const requested = /\bactividad\b/.test(q) ||
-    /\b(voz|llamada|conexiones|conect\w*|mensajes)\b/.test(q) &&
-    /\b(cuant|quien|tiempo|duracion|llev|veces|mas|hoy|ayer|histor|total|ranking|top)/.test(q);
+  const requested = isActivityQuestion(question);
   if (!requested || !context) return null;
   if (context.startsWith('Estadísticas de actividad no disponibles')) return context;
   let data;
@@ -19,6 +18,14 @@ function activityReply(context, question, requesterId, { voice = false } = {}) {
   catch { return null; }
   if (!data.cobertura || !data.hoy) return null;
   const stats = data.periodoConsultado || data.hoy;
+  if (data.consultaHoraria) {
+    const h = data.consultaHoraria;
+    if (h.error) return h.error;
+    const summary = `${h.etiqueta} (hora de Chile): registré ${stats.mensajes} mensajes, ${stats.conexiones} conexiones y ${duration(stats.vozMs)} en voz sumando personas.`;
+    if (voice) return `${summary} Cobertura parcial.`;
+    const rows = /por hora|cada hora|desglose/.test(q) ? (stats.horas || []).map(r => `${r.hora}: ${r.mensajes} mensajes; ${duration(r.vozMs)} en voz.`).join('\n') : '';
+    return `${summary}${rows ? '\n' + rows : ''}\n${h.parcial ? 'El período incluye horas anteriores al inicio del registro por hora. ' : ''}Solo actividad observada; los intervalos sin registros no prueban inactividad. Desglose limitado a 24 horas con registros.`;
+  }
   if (!/tiempo|duracion|horas?|minutos?|segundos?|cuanto llev|por dia|al dia|diari/.test(q)) {
     return naturalActivity(data, q, requesterId, voice);
   }

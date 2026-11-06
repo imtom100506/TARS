@@ -48,6 +48,7 @@ function bot(activityContext = 'Actividad de voz: 3 participantes hoy.') {
       if (name === "./textMute") return { createTextMutes: () => ({ mute: async (...args) => muteCalls.push(args) }) };
       if (name === "./muteStore") return require("../src/muteStore");
       if (name === './activityReply') return require('../src/activityReply');
+      if (name === './activityQuery') return require('../src/activityQuery');
       if (name === './serverAudit') return { auditRequested: require('../src/serverAudit').auditRequested,
         createServerAudit: () => ({ reply: async () => 'Consulta de auditoría; sin acciones.' }) };
       if (name === './serverActivity') return { createServerActivity: () => ({ message: async () => {}, context: async () => activityContext }) };
@@ -98,6 +99,18 @@ test('ordinary slash and prefix questions receive voice activity without a new c
   });
   assert.equal(aiCalls.length, 2);
   for (const call of aiCalls) assert.match(call[2].context, /Actividad de voz: 3 participantes hoy/);
+});
+
+test('greetings omit activity context for slash and prefix conversations', async () => {
+  const { client, aiCalls } = bot();
+  const guild = { id: 'g', name: 'The Goats', members: { cache: new Map() } };
+  await client.listeners('interactionCreate')[0](interaction('tars', 'Buenos días TARS', guild));
+  await client.listeners('messageCreate')[0]({
+    content: '!tars Hola, qué tal?', author: { id: '1', username: 'tester' }, guild,
+    channel: { id: '2', sendTyping: async () => {} }, reply: async () => {},
+  });
+  assert.equal(aiCalls.length, 2);
+  for (const call of aiCalls) assert.doesNotMatch(call[2].context, /Actividad de voz|miembros humanos en caché/);
 });
 
 test('slash and prefix activity metrics stay conversational and bypass LLM rewriting', async () => {

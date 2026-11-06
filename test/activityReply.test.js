@@ -123,6 +123,19 @@ test('formatting never rounds seconds up to minutes; unrelated conversation stil
   assert.equal(duration(59999), '59 s'); assert.equal(duration(60000), '1 min');
   assert.equal(duration(10037000), '2 h 47 min 17 s');
   assert.equal(activityReply('anything', 'hola'), null);
+  assert.equal(activityReply('anything', 'Buenos días TARS'), null);
   const error = 'Estadísticas de actividad no disponibles por un error del registro. No inventes cifras.';
   assert.equal(activityReply(error, 'cómo va la actividad'), error);
+});
+
+test('hourly replies name the period and reject unsupported minutes instead of using today', async () => {
+  const f = await scenario(); f.advance(60000);
+  const q = 'actividad hoy por hora';
+  assert.match(activityReply(await f.context(q), q), /18:00: 0 mensajes; 4 min en voz/);
+  const night = 'qué tal estuvo la actividad del server anoche';
+  const reply = activityReply(await f.context(night), night);
+  assert.match(reply, /Anoche, de 2026-11-04 20:00 a 2026-11-05 06:00/);
+  assert.doesNotMatch(reply, /Ahora|hoy|4 min/);
+  const invalid = 'actividad hoy de 18:15 a 19:30';
+  assert.match(activityReply(await f.context(invalid), invalid), /horas completas/);
 });

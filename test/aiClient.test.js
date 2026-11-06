@@ -20,7 +20,8 @@ test('voice uses compact prompt and generation budget without retry storms', asy
   const ai = make(async (url, init) => { requests.push(JSON.parse(init.body)); return ok('Hola.'); });
   await ai.askAI('u', 'hola', { voice: true });
   assert.equal(requests[0].max_completion_tokens, 512);
-  assert.ok(requests[0].messages[0].content.length < 400);
+  assert.ok(requests[0].messages[0].content.length < 700);
+  assert.match(requests[0].messages[0].content, /Solo menciona estadísticas.*pregunta actual/);
 });
 
 test('voice preserves full generated explanation and asks to retain user language', async () => {
