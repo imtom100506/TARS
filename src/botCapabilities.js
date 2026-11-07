@@ -16,6 +16,7 @@ const HELP = "**Comandos disponibles:**\n" +
 
 const CAPABILITIES = `Funciones reales y únicas de esta instalación de TARS:\n${HELP}
 También se reconoce "resume <cantidad>" dentro de !tars o /tars para resumir mensajes.
+Puedes consultar cuántas personas hay en el servidor, sin contar bots, y sus estados actuales: en línea, ausentes, no molestar y desconectadas o invisibles. Los bots se cuentan aparte. Usa el recuento del contexto; no confundas conectados al servidor con participantes en voz. Discord no permite distinguir invisibles de desconectados.
 El borrado solo se ejecuta con !borrar o /borrar, nunca mediante IA. Examina los últimos 100 mensajes anteriores a la invocación y omite mensajes de 14 días o más. Más de 50 exige confirmación del mismo solicitante en el mismo canal.
 La desconexión de voz exige exactamente una mención, un rol autorizado por ID y Mover miembros en el canal; solicitante y bot deben superar al objetivo en jerarquía, con excepción de la jerarquía propia del dueño. No expulsa del servidor.
 Mutea/mute/silencia bloquea solo mensajes, publicaciones e hilos en los canales del servidor, incluido el chat escrito de canales de voz. No afecta hablar ni conectarse a voz y no usa timeout. Duraciones enteras: segundos, minutos, horas o días; abreviaturas s/m/h/d.

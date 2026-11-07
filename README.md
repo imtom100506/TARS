@@ -17,7 +17,18 @@ Groq genera las respuestas; Cloudflare es un respaldo opcional.
 
 ## Consumo y diagnóstico
 
-TARS recibe estadísticas solo cuando la pregunta actual solicita actividad por `!tars` o `/tars`;
+TARS puede responder `!tars cuánta gente hay en el server` o la misma pregunta en `/tars`.
+Consulta todos los miembros con sus presencias: personas sin bots, conectadas
+(en línea, ausentes y no molestar), desconectadas o invisibles y bots por separado.
+Discord no distingue invisibles de desconectados. Reutiliza el recuento durante
+60 segundos y comparte consultas simultáneas; si falla o está incompleto, avisa
+sin presentar la caché parcial como un total. Las preguntas de recuento se contestan
+sin IA; las demás conversaciones reciben estos datos como contexto para seguimientos.
+En Discord Developer Portal → Bot deben estar habilitados **Server Members Intent**
+y **Presence Intent**, además de **Message Content Intent** para los comandos de texto.
+El código ya solicita los tres. Reinicia o redespliega TARS tras actualizarlo.
+
+TARS recibe estadísticas históricas solo cuando la pregunta actual solicita actividad por `!tars` o `/tars`;
 los saludos y la charla casual reciben respuestas naturales sin reportes automáticos. Registra actividad
 sin comandos adicionales. Registra
 conexiones a voz, participantes únicos, minutos en voz (no minutos hablando),

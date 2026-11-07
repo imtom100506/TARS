@@ -21,6 +21,8 @@ const { createServerActivity, MARKER: ACTIVITY_MARKER } = require('./serverActiv
 const { activityReply } = require('./activityReply');
 const { isActivityQuestion } = require('./activityQuery');
 const { createServerAudit, auditRequested } = require('./serverAudit');
+const { createServerMembers, isMemberCountQuestion } = require('./serverMembers');
+const serverMembers = createServerMembers();
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages,
@@ -135,17 +137,6 @@ client.on("channelCreate", channel => {
   });
 });
 
-function getServerContext(guild) {
-  if (!guild) return "Conversación por mensaje privado.";
-  let members = 0, online = 0;
-  for (const member of guild.members.cache.values()) {
-    if (member.user.bot) continue;
-    members++;
-    if (member.presence?.status && member.presence.status !== "offline") online++;
-  }
-  return `Contexto del servidor "${guild.name}": ${members} miembros humanos en caché, ${online} conectados observados.`;
-}
-
 async function getActivityContext(guild, question, requesterId, responseChannelId) {
   if (!guild || !isActivityQuestion(question)) return '';
   try {
@@ -206,9 +197,10 @@ async function execute(ctx, command, argument) {
   }
   if (!text) return ctx.reply("Escribe algo después de `!tars`");
   void sendLog("mensaje", { usuario: ctx.user.username, canal: ctx.channel.name || "privado", mensaje: text });
-  const serverContext = isActivityQuestion(text) ? getServerContext(ctx.guild) : '';
   const recent = channelContext.get(ctx.channel.id) || [];
   if (!allowRequest(ctx.user.id, ctx.guild?.id)) return ctx.reply('Dame un momento antes de hacer otra consulta.');
+  if (isMemberCountQuestion(text)) return ctx.reply(await serverMembers.reply(ctx.guild));
+  const serverContext = await serverMembers.context(ctx.guild);
   const activityContext = await getActivityContext(ctx.guild, text, ctx.user.id, ctx.channel.id);
   const response = activityReply(activityContext, text, ctx.user.id) || await askAI(ctx.user.id, text, {
     conversationId: conversationScope({ guildId: ctx.guild?.id, channelId: ctx.channel.id, userId: ctx.user.id }),
