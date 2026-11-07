@@ -110,10 +110,9 @@ function createServerAudit({ activity, now = Date.now, maxPages = 10, refreshMs 
     }).join(' ');
     return `${actor}: ${A[e.action] || 'acción de auditoría'}${e.targetId ? ` sobre ${target}` : ''}.`;
   }
-  async function reply(g, question, { voice: spoken = false, requesterId } = {}) {
+  async function reply(g, question, { requesterId } = {}) {
     if (!auditRequested(question)) return null;
     if (!g) return 'Pídeme la auditoría dentro del servidor que quieres consultar.';
-    if (spoken) return 'Pídeme la auditoría por texto para mostrártela en privado.';
     if (!requesterId) return 'Necesitas el permiso Ver registro de auditoría para consultar estos datos.';
     const requestKey = `${g.id}:${requesterId}`, previousRequest = requests.get(requestKey);
     if (previousRequest !== undefined && now() - previousRequest < requestMs) return 'Espera unos segundos antes de consultar otra vez la auditoría.';

@@ -88,14 +88,6 @@ test('audit access requires fresh requester permissions, including cached record
   assert.equal(allowed.calls, 1);
 });
 
-test('voice audit requests never fetch or disclose details to other listeners', async () => {
-  const f = fixture();
-  f.set([f.entry('1', A.MemberBanAdd)]);
-  const answer = await f.audit.reply(f.g, 'auditoría', { requesterId: '1', voice: true });
-  assert.match(answer, /texto.*privado/);
-  assert.doesNotMatch(answer, /Ana|baneó/);
-  assert.equal(f.calls, 0);
-});
 
 test('unsupported audit dates and hourly requests never silently search another period', async () => {
   for (const question of ['auditoría del lunes pasado', 'auditoría de octubre', 'auditoría de hace tres días']) {

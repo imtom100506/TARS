@@ -57,7 +57,7 @@ function bot(activityContext = 'Actividad de voz: 3 participantes hoy.', options
         createServerAudit: () => ({ reply: async (...args) => { auditCalls.push(args); return options.auditReply || 'Consulta de auditoría; sin acciones.'; } }) };
       if (name === './serverActivity') return { createServerActivity: () => ({ message: async () => {}, context: async (...args) => { activityCalls.push(args); return activityContext; } }) };
       if (name === "./boundedMap") return require("../src/boundedMap");
-      if (["./usageBudget", "./voiceAudio", "./voice", "./wakeListener", "./voiceLog", "./deleteMessages"].includes(name)) return require(`../src/${name.slice(2)}`);
+      if (["./usageBudget", "./deleteMessages"].includes(name)) return require(`../src/${name.slice(2)}`);
       if (name.startsWith('./')) return require(`../src/${name.slice(2)}`);
       if (name.startsWith('node:')) return require(name);
       throw new Error(name);
@@ -297,8 +297,8 @@ test('conversation scope separates DMs, guilds, channels and users, while summar
   }
   const scopes = aiCalls.map(call => call[2].conversationId);
   assert.equal(new Set(scopes).size, 5);
-  assert.deepEqual(JSON.parse(scopes[0]), ['dm', 'dm-1', '1', 'text']);
-  assert.deepEqual(JSON.parse(scopes[1]), ['g1', 'c1', '1', 'text']);
+  assert.deepEqual(JSON.parse(scopes[0]), ['dm', 'dm-1', '1']);
+  assert.deepEqual(JSON.parse(scopes[1]), ['g1', 'c1', '1']);
   const summary = interaction('resumir', 1, { id: 'g1' });
   summary.channel.id = 'c1'; summary.channel.messages = { fetch: async ({ limit }) => {
     assert.equal(limit, 1); return new Map([['m1', { id: 'm1', author: { username: 'person', bot: false }, content: 'Una conversación.' }]]);
@@ -372,4 +372,20 @@ test('every fragment of slash audit responses remains ephemeral', async () => {
   assert.equal(request.deferOptions.flags, 64);
   assert.ok(request.replies.length > 1);
   for (const reply of request.replies.slice(1)) assert.equal(reply.flags, 64, 'Follow-up audit chunks must explicitly stay ephemeral');
+});
+
+test('removed commands are ignored in both slash and prefix routes', async () => {
+  const { client, aiCalls } = bot();
+  for (const name of ['entrar', 'escuchar', 'salir']) {
+    const command = interaction(name);
+    await client.listeners('interactionCreate')[0](command);
+    assert.equal(command.deferred, undefined);
+    assert.equal(command.replies.length, 0);
+    const replies = [];
+    await client.listeners('messageCreate')[0]({ content: '!' + name,
+      author: { id: '1', username: 'tester' }, channel: { id: 'dm' },
+      reply: async value => replies.push(value) });
+    assert.equal(replies.length, 0);
+  }
+  assert.equal(aiCalls.length, 0);
 });

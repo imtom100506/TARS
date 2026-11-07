@@ -6,38 +6,21 @@ const ok = text => new Response(JSON.stringify({ choices: [{ message: { content:
 const fail = (status, headers = {}) => new Response('{}', { status, headers });
 const make = fetchImpl => createAI({ env, systemPrompt: 'TARS', fetchImpl, wait: async () => {}, spacingMs: 0 });
 
-test('shared budget blocks text and voice before any provider call', async () => {
+test('budget blocks text before any provider call', async () => {
   let calls = 0;
   const ai = make(async () => { calls++; return ok('ok'); });
   ai.setBudget({ reserve: async () => { throw Object.assign(new Error('budget'), { code: 'AI_BUDGET' }); } });
   await assert.rejects(ai.askAI('u', 'hola'), { code: 'AI_BUDGET' });
-  await assert.rejects(ai.askAI('u', 'hola', { voice: true }), { code: 'AI_BUDGET' });
   assert.equal(calls, 0);
 });
 
-test('voice uses compact prompt and generation budget without retry storms', async () => {
-  const requests = [];
-  const ai = make(async (url, init) => { requests.push(JSON.parse(init.body)); return ok('Hola.'); });
-  await ai.askAI('u', 'hola', { voice: true });
-  assert.equal(requests[0].max_completion_tokens, 512);
-  assert.ok(requests[0].messages[0].content.length < 700);
-  assert.match(requests[0].messages[0].content, /Solo menciona estadísticas.*pregunta actual/);
-});
 
-test('voice preserves full generated explanation and asks to retain user language', async () => {
-  const reply = 'Explanation with all details. '.repeat(25) + 'Final answer.';
-  let prompt;
-  const ai = make(async (url, init) => { prompt = JSON.parse(init.body).messages[0].content; return ok(reply); });
-  assert.equal(await ai.askAI('u', 'Explain step by step', { voice: true, detailed: true }), reply);
-  assert.match(prompt, /Conserva el idioma/);
-  assert.match(prompt, /1500/);
-});
 
 test('provider usage settles the reservation before delivering a response', async () => {
   const usage = [];
   const ai = make(async () => new Response(JSON.stringify({ usage: { total_tokens: 150 }, choices: [{ message: { content: 'Hola.' }, finish_reason: 'stop' }] })));
   ai.setBudget({ reserve: async () => ({ settle: async value => usage.push(value) }) });
-  assert.equal(await ai.askAI('u', 'hola', { voice: true }), 'Hola.');
+  assert.equal(await ai.askAI('u', 'hola'), 'Hola.');
   assert.deepEqual(usage, [150]);
 });
 
@@ -48,19 +31,19 @@ test('balance is logged once after settlement and after blocked requests', async
     if (blocked) throw Object.assign(Error('pausa'), { code: 'AI_BUDGET' });
     return { settle: async () => events.push('settle') };
   }, logStatus: () => events.push('balance') });
-  await ai.askAI('u', 'hola', { voice: true });
+  await ai.askAI('u', 'hola');
   assert.deepEqual(events, ['settle', 'balance']);
   blocked = true;
-  await assert.rejects(ai.askAI('u', 'otra', { voice: true }), { code: 'AI_BUDGET' });
+  await assert.rejects(ai.askAI('u', 'otra'), { code: 'AI_BUDGET' });
   assert.deepEqual(events, ['settle', 'balance', 'balance']);
 });
 
-test('cancelled voice request uses no provider calls or reservations', async () => {
+test('cancelled request uses no provider calls or reservations', async () => {
   let calls = 0, reservations = 0;
   const ai = make(async () => { calls++; return ok('Hola.'); });
   ai.setBudget({ reserve: async () => { reservations++; } });
   const controller = new AbortController(); controller.abort();
-  await assert.rejects(ai.askAI('u', 'hola', { voice: true, signal: controller.signal }));
+  await assert.rejects(ai.askAI('u', 'hola', { signal: controller.signal }));
   assert.equal(calls, 0); assert.equal(reservations, 0);
 });
 
@@ -199,7 +182,7 @@ test('provider fallback emits operational metadata without prompt or credentials
   assert.doesNotMatch(JSON.stringify(events), /secret-key|private question/);
 });
 
-test('conversation scopes isolate DMs, public channels, servers, users and voice', async () => {
+test('conversation scopes isolate DMs, public channels, servers and users', async () => {
   const { conversationScope } = require('../src/conversationScope');
   const payloads = [];
   const ai = make(async (_, init) => { payloads.push(JSON.parse(init.body)); return ok('ok'); });
@@ -209,10 +192,9 @@ test('conversation scopes isolate DMs, public channels, servers, users and voice
     { guildId: 'guild-a', channelId: 'public-a', userId: 'u' },
     { guildId: 'guild-a', channelId: 'public-b', userId: 'u' },
     { guildId: 'guild-b', channelId: 'public-b', userId: 'u' },
-    { guildId: 'guild-b', channelId: 'public-b', userId: 'u', modality: 'voice' },
   ];
   for (const scope of scopes) {
-    await ai.askAI('u', 'public question', { conversationId: conversationScope(scope), voice: scope.modality === 'voice' });
+    await ai.askAI('u', 'public question', { conversationId: conversationScope(scope) });
     assert.equal(payloads.at(-1).messages.length, 2);
     assert.doesNotMatch(JSON.stringify(payloads.at(-1)), /PRIVATE_MARKER/);
   }
@@ -227,26 +209,25 @@ test('reset invalidates every active scope and queued request for a user', async
   const payloads = [], releases = [];
   const ai = make(async (_, init) => {
     const position = payloads.push(JSON.parse(init.body));
-    if (position <= 2) await new Promise(resolve => { releases[position - 1] = resolve; });
+    if (position === 1) await new Promise(resolve => { releases[position - 1] = resolve; });
     return ok('ok');
   });
   const first = ai.askAI('u', 'TEXT_TO_FORGET', { conversationId: 'text-channel' });
-  const second = ai.askAI('u', 'VOICE_TO_FORGET', { conversationId: 'voice-channel', voice: true });
+  const second = assert.rejects(ai.askAI('u', 'SECOND_TO_FORGET', { conversationId: 'second-channel' }), { code: 'AI_RESET' });
   const queued = assert.rejects(ai.askAI('u', 'QUEUED_TO_FORGET', { conversationId: 'third-channel' }), { code: 'AI_RESET' });
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(payloads.length, 2);
+  assert.equal(payloads.length, 1);
   ai.clearHistory('u');
-  releases[1](); await second;
-  releases[0](); await first; await queued;
-  assert.equal(payloads.length, 2, 'reset queued requests never reach a provider');
-  for (const conversationId of ['text-channel', 'voice-channel', 'third-channel']) {
+  releases[0](); await first; await second; await queued;
+  assert.equal(payloads.length, 1, 'reset queued requests never reach a provider');
+  for (const conversationId of ['text-channel', 'second-channel', 'third-channel']) {
     await ai.askAI('u', 'new question', { conversationId });
     assert.doesNotMatch(JSON.stringify(payloads.at(-1)), /TO_FORGET/);
     assert.equal(payloads.at(-1).messages.length, 2);
   }
 });
 
-test('shared explicit scope serializes text and voice without overwriting completed turns', async () => {
+test('shared explicit scope serializes messages without overwriting completed turns', async () => {
   const payloads = []; let release;
   const ai = make(async (_, init) => {
     const position = payloads.push(JSON.parse(init.body));
@@ -254,14 +235,14 @@ test('shared explicit scope serializes text and voice without overwriting comple
     return ok('ok');
   });
   const text = ai.askAI('u', 'first text', { conversationId: 'shared' });
-  const voice = ai.askAI('u', 'second voice', { conversationId: 'shared', voice: true });
+  const second = ai.askAI('u', 'second text', { conversationId: 'shared' });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(payloads.length, 1);
-  release(); await Promise.all([text, voice]);
+  release(); await Promise.all([text, second]);
   assert.match(JSON.stringify(payloads[1]), /first text/);
   await ai.askAI('u', 'third turn', { conversationId: 'shared' });
   assert.match(JSON.stringify(payloads[2]), /first text/);
-  assert.match(JSON.stringify(payloads[2]), /second voice/);
+  assert.match(JSON.stringify(payloads[2]), /second text/);
 });
 
 test('reset removes completed scopes of only the requested user', async () => {

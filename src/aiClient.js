@@ -2,7 +2,6 @@ const { setTimeout: sleep } = require('node:timers/promises');
 const { withAIRetry } = require('./aiRetry');
 const { responseLimit, compactResponse } = require('./responsePolicy');
 const { BoundedMap } = require('./boundedMap');
-const { readSentenceStream } = require('./optimization/sentenceStream');
 
 const unavailable = () => Object.assign(new Error('Los proveedores de IA no están disponibles.'), { code: 'AI_UNAVAILABLE' });
 const clip = (text, max) => text.length <= max ? text : `${text.slice(0, max / 2)}\n[Contenido recortado]\n${text.slice(-max / 2)}`;
@@ -30,22 +29,20 @@ function createAI({ systemPrompt, env = process.env, fetchImpl = global.fetch,
     url: `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/ai/v1/chat/completions`,
     model: '@cf/google/gemma-4-26b-a4b-it', blockedUntil: 0, nextRequest: 0,
   });
-  let queue = Promise.resolve(), voiceQueue = Promise.resolve();
+  let queue = Promise.resolve();
   let pending = 0;
   let budget;
 
-  async function request(provider, messages, voice = false, signal, streaming) {
+  async function request(provider, messages, signal) {
     signal?.throwIfAborted();
-    const nextKey = voice ? 'nextVoiceRequest' : 'nextRequest';
-    if (provider[nextKey] > now()) await wait(provider[nextKey] - now(), undefined, { signal });
+    if (provider.nextRequest > now()) await wait(provider.nextRequest - now(), undefined, { signal });
     signal?.throwIfAborted();
-    provider[nextKey] = now() + (voice ? Math.max(0, Number(env.TARS_VOICE_SPACING_MS) || 0) : spacingMs);
-    const body = { model: provider.model, messages, stream: !!streaming };
-    if (streaming && provider.name === 'Groq') body.stream_options = { include_usage: true };
+    provider.nextRequest = now() + spacingMs;
+    const body = { model: provider.model, messages, stream: false };
     if (provider.name === 'Groq') Object.assign(body, {
-      max_completion_tokens: voice ? 512 : 2048, reasoning_effort: 'low', include_reasoning: false,
+      max_completion_tokens: 2048, reasoning_effort: 'low', include_reasoning: false,
     });
-    else body.max_tokens = voice ? 256 : 1024;
+    else body.max_tokens = 1024;
     const reservation = budget ? await budget.reserve({ tokens: Buffer.byteLength(JSON.stringify(messages), 'utf8') + (body.max_completion_tokens || body.max_tokens) }) : undefined;
     signal?.throwIfAborted();
     try {
@@ -54,11 +51,6 @@ function createAI({ systemPrompt, env = process.env, fetchImpl = global.fetch,
         headers: { Authorization: `Bearer ${provider.key}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(body), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20000)]) : AbortSignal.timeout(20000),
       });
-      if (response.ok && streaming) {
-        const result = await readSentenceStream(response, { ...streaming, signal });
-        await reservation?.settle?.(result.usage);
-        return result.text;
-      }
       // Leer el cuerpo dentro del mismo manejo de errores y timeout.
       const data = await response.json();
       if (response.ok && data.success !== false) await reservation?.settle?.(data.usage?.total_tokens);
@@ -76,21 +68,20 @@ function createAI({ systemPrompt, env = process.env, fetchImpl = global.fetch,
       return text;
     } catch (error) {
       signal?.throwIfAborted();
-      if (error.status || error.code === 'AI_PARTIAL') throw error;
+      if (error.status) throw error;
       // Fallos de red, JSON inválido y timeout son recuperables.
       throw Object.assign(new Error(`${provider.name}: fallo de conexión o respuesta`), { status: 503 });
     }
   }
 
-  async function generate(messages, voice = false, signal, streaming, onProviderFailure) {
+  async function generate(messages, signal, onProviderFailure) {
     if (!providers.length) throw Object.assign(new Error('Faltan credenciales de IA.'), { code: 'AI_CONFIG' });
     for (const provider of providers) {
       if (provider.blockedUntil > now()) continue;
       try {
-        return voice ? await request(provider, messages, true, signal, streaming) : await withAIRetry(() => request(provider, messages, false, signal), { wait });
+        return await withAIRetry(() => request(provider, messages, signal), { wait });
       } catch (error) {
         signal?.throwIfAborted();
-        if (error.code === 'AI_PARTIAL') throw error;
         if (error.code === 'AI_BUDGET' || error.cause?.code === 'AI_BUDGET') throw error.cause || error;
         const status = error.cause?.status || error.status;
         if (status !== 429) provider.blockedUntil = now() + ([400, 401, 403, 404].includes(status) ? 300000 : 30000);
@@ -101,7 +92,7 @@ function createAI({ systemPrompt, env = process.env, fetchImpl = global.fetch,
     throw unavailable();
   }
 
-  function askAI(userId, userMessage, { context = '', conversationId, brief = false, voice = false, signal, externalHistory, voicePrompt, onSentence, onProviderFailure, detailed = false } = {}) {
+  function askAI(userId, userMessage, { context = '', conversationId, brief = false, signal, onProviderFailure } = {}) {
     const logBalance = () => {
       if (budget?.logStatus) budget.logStatus();
       else console.info('[IA:saldo]', JSON.stringify({ alcance: 'limite_interno_24h', tokens_restantes: null, estado: 'sin_registro' }));
@@ -111,27 +102,25 @@ function createAI({ systemPrompt, env = process.env, fetchImpl = global.fetch,
       return Promise.reject(Object.assign(new Error('Cola de IA llena.'), { code: 'AI_BUSY' }));
     }
     pending++;
-    const key = JSON.stringify([userId, conversationId ?? (voice ? 'default:voice' : 'default:text')]);
+    const key = JSON.stringify([userId, conversationId ?? 'default:text']);
     const current = { userId, cleared: false };
     turns.add(current);
     const enqueued = now();
-    // A caller may deliberately reuse a scope across modalities. Serialize its writes
-    // as well as provider queues, so neither reply overwrites a concurrent turn.
-    const dependencies = [voice ? voiceQueue : queue, conversationQueues.get(key)];
+    // Serialize writes so concurrent replies preserve completed turns.
+    const dependencies = [queue, conversationQueues.get(key)];
     const task = Promise.all(dependencies).then(async () => {
       signal?.throwIfAborted();
       if (current.cleared) throw Object.assign(new Error('La conversación se reinició antes de procesar esta consulta.'), { code: 'AI_RESET' });
       if (now() - enqueued > 90000) throw Object.assign(new Error('La cola de IA tardó demasiado.'), { code: 'AI_BUSY' });
-      const history = externalHistory || histories.get(key)?.messages || [];
-      const input = clip(String(userMessage), voice ? 800 : 6000);
-      const limit = voice ? (detailed || responseLimit(input) > 600 ? 1500 : 360) : brief ? 600 : responseLimit(input);
-      const prompt = voice ? voicePrompt || 'Eres TARS, robot con humor seco. Conserva el idioma del usuario. Responde con 1-2 frases breves; amplía cuando la pregunta necesite explicación. Sin listas, Markdown ni saludos repetidos. Sigue el hilo; aclara solo si hace falta. No ejecutas acciones ni inventas recuerdos.' : systemPrompt;
-      const messages = [{ role: 'system', content: `${prompt}\nResponde a saludos y charla casual de forma natural y breve. Solo menciona estadísticas o actividad del servidor si la pregunta actual las solicita; no retomes reportes del historial ante un saludo.\nLímite de esta respuesta: ${limit} caracteres. Termina tus frases dentro de ese espacio.` }, ...(voice ? history.slice(externalHistory ? -6 : -2).map(msg => ({ role: msg.role, content: clip(msg.content, 500) })) : history)];
+      const history = histories.get(key)?.messages || [];
+      const input = clip(String(userMessage), 6000);
+      const limit = brief ? 600 : responseLimit(input);
+      const messages = [{ role: 'system', content: `${systemPrompt}\nResponde a saludos y charla casual de forma natural y breve. Solo menciona estadísticas o actividad del servidor si la pregunta actual las solicita; no retomes reportes del historial ante un saludo.\nLímite de esta respuesta: ${limit} caracteres. Termina tus frases dentro de ese espacio.` }, ...history];
       messages.push({ role: 'user', content: context ? `Contexto del servidor:\n${clip(context, 12000)}\n\nPregunta: ${input}` : input });
-      const generated = await generate(messages, voice, signal, onSentence ? { onSentence, limit } : undefined, onProviderFailure);
-      const reply = voice || onSentence ? generated : compactResponse(generated, limit);
+      const generated = await generate(messages, signal, onProviderFailure);
+      const reply = compactResponse(generated, limit);
       // No restaurar memoria si el usuario la borró mientras esperaba la respuesta.
-      if (!current.cleared && !externalHistory) {
+      if (!current.cleared) {
         const updated = [...history, { role: 'user', content: input }, { role: 'assistant', content: reply }];
         let characters = updated.reduce((sum, msg) => sum + msg.content.length, 0);
         while (updated.length > 8 || characters > 4000) {
@@ -146,14 +135,14 @@ function createAI({ systemPrompt, env = process.env, fetchImpl = global.fetch,
       pending--;
       if (conversationQueues.get(key) === next) conversationQueues.delete(key);
     });
-    if (voice) voiceQueue = next; else queue = next;
+    queue = next;
     conversationQueues.set(key, next);
     return task;
   }
 
   function clearHistory(userId) {
     for (const [key, history] of histories) if (history.userId === userId) histories.delete(key);
-    // Includes queued requests, not just whichever modality most recently started.
+    // Includes queued requests as well as active requests.
     for (const turn of turns) if (turn.userId === userId) turn.cleared = true;
   }
   return { askAI, clearHistory, setBudget: value => { budget = value; } };

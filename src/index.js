@@ -16,10 +16,6 @@ const { parseModeration, moderate } = require("./moderation");
 const { createTextMutes } = require("./textMute");
 const { createDiscordMuteStore } = require("./muteStore");
 const { createUsageBudget } = require("./usageBudget");
-const { createVoiceAudio } = require("./voiceAudio");
-const { createVoice } = require("./voice");
-const { createWakeFactory } = require('./wakeListener');
-const { createVoiceLog } = require('./voiceLog');
 const { deleteMessages, confirmDelete } = require('./deleteMessages');
 const { createServerActivity, MARKER: ACTIVITY_MARKER } = require('./serverActivity');
 const { activityReply } = require('./activityReply');
@@ -51,19 +47,15 @@ async function getAuditReply(guild, question, options) {
 client.on('guildAuditLogEntryCreate', (entry, guild) => { void audit.record(entry, guild).catch(activityError); });
 const textMutes = createTextMutes({ store: muteStateChannel ? createDiscordMuteStore(client, muteStateChannel) : undefined });
 const channelContext = createRecentContext();
-const voiceEnabled = process.env.TARS_VOICE_ENABLED === 'true';
 const rate = (key, fallback) => { const value = Number(process.env[key]); return Number.isInteger(value) && value > 0 && value <= 60 ? value : fallback; };
-const budget = createUsageBudget({ minuteRequests: rate('TARS_LLM_REQUESTS_PER_MINUTE', 6), sttMinuteRequests: rate('TARS_STT_REQUESTS_PER_MINUTE', 20), store: muteStateChannel ? createDiscordMuteStore(client, muteStateChannel,
+const budget = createUsageBudget({ minuteRequests: rate('TARS_LLM_REQUESTS_PER_MINUTE', 6), store: muteStateChannel ? createDiscordMuteStore(client, muteStateChannel,
   global.fetch, 'TARS · Presupuesto IA · No borrar', 'tars-usage.json') : createFileStore(path.join(process.env.TARS_DATA_DIR || path.join(__dirname, '..', 'data'), 'usage.json')) });
 setBudget(budget);
-const voice = createVoice({ client, askAI, getContext: getActivityContext, getAuditReply, enabled: voiceEnabled, audio: createVoiceAudio({ budget }), wakeFactory: createWakeFactory(), recordConversation: createVoiceLog(client), sendLog });
 client.on('voiceStateUpdate', (oldState, newState) => {
   void audit.voice(oldState, newState).catch(activityError);
   void activity.voice(oldState, newState).catch(activityError);
-  voice.onVoiceState(oldState, newState);
 });
 async function shutdown() {
-  voice.leave();
   client.destroy();
   await activity.flush().catch(activityError);
   process.exit(0);
@@ -84,8 +76,6 @@ client.on('shardResume', syncActivityShard);
 client.on('shardReady', syncActivityShard);
 
 const commands = [
-  ...['entrar', 'escuchar', 'salir'].map(name => new SlashCommandBuilder().setName(name)
-    .setDescription({ entrar: 'Invita a TARS a tu canal de voz', escuchar: 'Activa una pregunta de voz de hasta 12 segundos', salir: 'Desconecta a TARS de tu canal de voz' }[name])),
   new SlashCommandBuilder().setName("tars").setDescription("Habla con TARS")
     .addStringOption(o => o.setName("mensaje").setDescription("Tu mensaje para TARS").setRequired(true)),
   new SlashCommandBuilder().setName("reset").setDescription("Borra tu historial de conversación con TARS"),
@@ -176,7 +166,6 @@ async function summarize(ctx, count) {
 }
 
 async function execute(ctx, command, argument) {
-  if (['entrar', 'escuchar', 'salir'].includes(command)) return voice.handle(ctx, command);
   if (command === "ping") return ctx.reply(`Pong! Latencia: **${client.ws.ping}ms**`);
   if (command === "ayuda") return ctx.reply(HELP);
   if (command === "reset") {
@@ -277,7 +266,7 @@ client.on("messageCreate", async message => {
   if (message.author.bot) return;
   if (message.guild) await activity.message(message).catch(activityError);
   channelContext.add(message.channel.id, message.author.id, `${message.author.username}: ${message.content}`);
-  const match = message.content.trim().match(/^!(tars|reset|ping|ayuda|resumir|usuarios|entrar|escuchar|salir|borrar)(?:\s+([\s\S]*))?$/i);
+  const match = message.content.trim().match(/^!(tars|reset|ping|ayuda|resumir|usuarios|borrar)(?:\s+([\s\S]*))?$/i);
   const ctx = {
     user: message.author, guild: message.guild, channel: message.channel, messageId: message.id,
     reply: async text => {

@@ -1,6 +1,5 @@
-const VOICE_ROLES = ["Líder", "Sigma"];
+const MODERATOR_ROLES = ["Líder", "Sigma"];
 const HELP = "**Comandos disponibles:**\n" +
-  "`/entrar`, `/escuchar`, `/salir` (también con !) — Voz si está habilitada; preguntas de hasta 12 segundos. Salida tras 5 minutos de inactividad. Hey TARS, si está configurado: 8 segundos para continuar tras cada respuesta\n" +
   "`!tars <mensaje>` o `/tars` — Habla con TARS\n" +
   "`!ayuda` o `/ayuda` — Muestra esta lista\n" +
   "`!reset` o `/reset` — Borra tu historial\n" +
@@ -8,16 +7,15 @@ const HELP = "**Comandos disponibles:**\n" +
   "`!borrar <cantidad>` o `!borrar @usuario <cantidad>` (también /borrar) — 1 a 100 mensajes recientes; más de 50 requiere sí/no del solicitante en 30 segundos. Líder o Sigma y Gestionar mensajes. Omite fijados y registros internos.\n" +
   "`!resumir <cantidad>` o `/resumir` — Resume entre 1 y 50 mensajes (20 por defecto)\n" +
   "`!usuarios <rol>` o `/usuarios` — Ver conectados o miembros de un rol\n" +
-  `\`!tars saca a @usuario del canal de voz\` — Desconecta de voz (${VOICE_ROLES.join(" o ")})\n` +
+  `\`!tars saca a @usuario del canal de voz\` — Desconecta de voz (${MODERATOR_ROLES.join(" o ")})\n` +
   "`!tars mutea a @usuario por 10 minutos` — Mute solo de texto (hasta 28 días)\n" +
   "`!tars desmutea a @usuario` — Retira el mute de texto\n" +
   "`!tars cambia el apodo de @usuario a Nuevo apodo` — Cambia apodo\n" +
   "`!tars quita el apodo de @usuario` — Restablece apodo\n" +
-  `Mute de texto y apodos: ${VOICE_ROLES.join(" o ")}, permiso de Discord correspondiente y objetivo de menor jerarquía. También mediante /tars.`;
+  `Mute de texto y apodos: ${MODERATOR_ROLES.join(" o ")}, permiso de Discord correspondiente y objetivo de menor jerarquía. También mediante /tars.`;
 
 const CAPABILITIES = `Funciones reales y únicas de esta instalación de TARS:\n${HELP}
 También se reconoce "resume <cantidad>" dentro de !tars o /tars para resumir mensajes.
-La voz requiere activación en el alojamiento. /entrar conecta, /escuchar captura solo la pregunta del solicitante y /salir desconecta. Sale tras 5 minutos de inactividad; cada invocación aceptada reinicia el plazo. Con el detector local opcional reconoce «Hey TARS» y, tras responder, permite al mismo interlocutor continuar sin la frase durante 8 segundos. Cada continuación aceptada también reinicia la inactividad. El mensaje de conexión indica qué modo está activo. No prometas activación por nombre sin esa configuración.
 El borrado solo se ejecuta con !borrar o /borrar, nunca mediante IA. Examina los últimos 100 mensajes anteriores a la invocación y omite mensajes de 14 días o más. Más de 50 exige confirmación del mismo solicitante en el mismo canal.
 La desconexión de voz exige exactamente una mención, un rol autorizado por ID y Mover miembros en el canal; solicitante y bot deben superar al objetivo en jerarquía, con excepción de la jerarquía propia del dueño. No expulsa del servidor.
 Mutea/mute/silencia bloquea solo mensajes, publicaciones e hilos en los canales del servidor, incluido el chat escrito de canales de voz. No afecta hablar ni conectarse a voz y no usa timeout. Duraciones enteras: segundos, minutos, horas o días; abreviaturas s/m/h/d.
@@ -43,4 +41,4 @@ function commandReply(text) {
   return null;
 }
 
-module.exports = { VOICE_ROLES, HELP, CAPABILITIES, commandReply };
+module.exports = { MODERATOR_ROLES, HELP, CAPABILITIES, commandReply };

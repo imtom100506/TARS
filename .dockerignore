@@ -4,6 +4,3 @@ node_modules
 data
 test
 *.log
-models/sherpa-onnx-*
-models/vits-piper-*
-models/*.tar.bz2

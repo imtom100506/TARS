@@ -2,18 +2,18 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createUsageBudget } = require('../src/usageBudget');
 
-test('six voice turns fit per minute; limits persist and expire without clearing history', async () => {
+test('six requests fit per minute; limits persist and expire without clearing history', async () => {
   let time = 1000, saved;
   const store = { read: async () => saved, write: async s => { saved = s; } };
   const budget = createUsageBudget({ store, now: () => time });
   for (let i = 0; i < 6; i++) {
-    await budget.reserve({ audio: 10 }); await budget.reserve({ tokens: 1000 });
+    await budget.reserve({ tokens: 1000 });
   }
   const restarted = createUsageBudget({ store, now: () => time });
-  await assert.rejects(restarted.reserve({ audio: 10 }), { code: 'AI_BUDGET', reason: 'requests_minute', retryAfterMs: 60000 });
+  await assert.rejects(restarted.reserve({ tokens: 0 }), { code: 'AI_BUDGET', reason: 'requests_minute', retryAfterMs: 60000 });
   time += 60000;
-  await restarted.reserve({ audio: 10 });
-  assert.equal(JSON.parse(saved).length, 13);
+  await restarted.reserve({ tokens: 0 });
+  assert.equal(JSON.parse(saved).length, 7);
 });
 
 test('daily exhaustion has a distinct message and exact recovery time', async () => {
@@ -28,23 +28,23 @@ test('daily exhaustion has a distinct message and exact recovery time', async ()
 test('failed writes and invalid reservations never create usage entries', async () => {
   let writes = 0;
   const budget = createUsageBudget({ store: { read: async () => null, write: async () => { writes++; throw Error(); } } });
-  await assert.rejects(budget.reserve({ audio: -1 }), { reason: 'storage' });
+  await assert.rejects(budget.reserve({ tokens: -1 }), { reason: 'storage' });
   assert.equal(writes, 0);
   await assert.rejects(budget.reserve(), { reason: 'storage' });
   assert.equal(writes, 1);
 });
 
-test('actual tokens replace estimates durably without resetting request or audio counts', async () => {
+test('actual tokens replace estimates durably without resetting request counts', async () => {
   let saved;
   const store = { read: async () => saved, write: async s => { saved = s; } };
   const budget = createUsageBudget({ store, now: () => 1000, dailyTokens: 1000 });
   const receipt = await budget.reserve({ tokens: 900 });
   await assert.rejects(budget.reserve({ tokens: 200 }), { reason: 'tokens_day' });
-  await Promise.all([receipt.settle(100), budget.reserve({ audio: 10 })]);
+  await Promise.all([receipt.settle(100), budget.reserve({ tokens: 0 })]);
   await receipt.settle(1);
   const restarted = createUsageBudget({ store, now: () => 1000, dailyTokens: 1000 });
   await restarted.reserve({ tokens: 900 });
-  assert.deepEqual(JSON.parse(saved).map(e => [e.tokens, e.audio]), [[100, 0], [0, 10], [900, 0]]);
+  assert.deepEqual(JSON.parse(saved).map(e => e.tokens), [100, 0, 900]);
 });
 
 test('missing usage and failed settlement keep the conservative reservation', async () => {
@@ -70,14 +70,13 @@ test('balance reflects reservations, actual usage and rolling expiry; unknown is
 });
 
 
-test('STT quota can exceed LLM quota independently and errors identify exact scope', async () => {
-  let time = 1000, saved;
-  const budget = createUsageBudget({ now: () => time, minuteRequests: 6, sttMinuteRequests: 20,
-    store: { read: async () => saved, write: async value => { saved = value; } } });
-  for (let i = 0; i < 20; i++) await budget.reserve({ audio: 10 });
-  for (let i = 0; i < 6; i++) await budget.reserve({ tokens: 100 });
-  time += 45000;
-  await assert.rejects(budget.reserve({ tokens: 100 }), e => e.scope === 'llm' && e.retryAfterMs === 15000 && /15 segundos/.test(e.message));
-  await assert.rejects(budget.reserve({ audio: 10 }), e => e.scope === 'stt' && /transcripciones/.test(e.message));
-  time += 15000; await budget.reserve({ audio: 10 }); await budget.reserve({ tokens: 100 });
+
+test('existing usage records keep token and request limits during schema cleanup', async () => {
+  let saved = JSON.stringify([{ time: 1000, tokens: 900, audio: 0 }, { time: 1000, tokens: 0, audio: 10 }]);
+  const store = { read: async () => saved, write: async value => { saved = value; } };
+  const budget = createUsageBudget({ store, now: () => 1000, dailyRequests: 2 });
+  await budget.check();
+  assert.deepEqual(JSON.parse(saved), [{ time: 1000, tokens: 900 }, { time: 1000, tokens: 0 }]);
+  assert.equal(budget.status().tokens_contabilizados, 900);
+  await assert.rejects(budget.reserve(), { reason: 'requests_day' });
 });

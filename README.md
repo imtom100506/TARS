@@ -1,14 +1,8 @@
 # TARS
 
-Bot de Discord con conversación por texto y voz. Se despliega usando el Dockerfile
+Bot de Discord con conversación por texto. Se despliega usando el Dockerfile
 en Render; configura los secretos y opciones indicados en `.env.example`.
 No necesita una computadora personal encendida. Una sola instancia por token.
-
-`!entrar` / `/entrar`: di «Hey TARS» seguido de tu consulta. Después de cada respuesta
-tienes 8 segundos para continuar sin repetir la frase, solo con el mismo interlocutor.
-Sale tras 5 minutos de inactividad. También admite `/escuchar` y `/salir`.
-Durante sus respuestas solo acepta controles del interlocutor activo. Detecta hasta tres hablantes simultáneos, sin mezclar
-sus voces; responde a una pregunta por vez. Las preguntas duran como máximo 12 segundos.
 
 `!borrar 10` borra mensajes del canal; `!borrar @usuario 10` filtra por autor.
 También existe `/borrar cantidad usuario`. Cantidades de 1 a 50 se ejecutan directamente;
@@ -19,23 +13,13 @@ invocación; omite fijados, registros internos y mensajes de 14 días o más. Al
 revalida permisos y solo puede borrar los mensajes seleccionados originalmente.
 Este comando no usa IA ni tokens. No se realizan borrados como parte de las pruebas.
 
-La detección y voz Davefx española se ejecutan localmente en Render. Los modelos
-se descargan y verifican al construir Docker. Groq transcribe las preguntas y
-genera respuestas; Cloudflare es un respaldo opcional para el texto. No se guardan
-grabaciones. Las preguntas ya transcritas y respuestas reproducidas se envían al
-canal de texto `logs-tars` del mismo servidor, con autor, canal y hora. TARS necesita
-Ver canal y Enviar mensajes allí. No se registra conversación de fondo ni se hacen
-llamadas adicionales a IA para los registros. Si falla la transcripción no habrá
-texto que registrar; si falla la respuesta, se conserva solo la pregunta. Avisa a
-los participantes de este registro; sus textos quedan visibles para quienes tengan
-acceso a `logs-tars`. El detector puede equivocarse con ruido
-o acentos; `/escuchar` permite invocarlo manualmente.
+Groq genera las respuestas; Cloudflare es un respaldo opcional.
 
 ## Consumo y diagnóstico
 
-TARS recibe estadísticas solo cuando la pregunta actual solicita actividad por `!tars`, `/tars` o voz;
+TARS recibe estadísticas solo cuando la pregunta actual solicita actividad por `!tars` o `/tars`;
 los saludos y la charla casual reciben respuestas naturales sin reportes automáticos. Registra actividad
-sin comandos adicionales y aunque la escucha de voz esté desactivada. Registra
+sin comandos adicionales. Registra
 conexiones a voz, participantes únicos, minutos en voz (no minutos hablando),
 rankings por duración y conexiones, mensajes, adjuntos e ingresos/salidas de
 miembros humanos en los servidores y canales cuyos eventos recibe. Los cambios
@@ -53,7 +37,7 @@ El tiempo sumado entre personas no es la duración de una sola llamada.
 TARS también consulta auditoría cuando se pregunta por baneos, expulsiones, mutes,
 ensordecimientos, timeouts o movimientos. Tanto TARS como el solicitante necesitan
 **Ver registro de auditoría**. `/tars` entrega estas consultas de forma efímera;
-`!tars` las envía por mensaje privado. En voz pide hacer la consulta por texto.
+`!tars` las envía por mensaje privado.
 Usa el intent GuildModeration y una caché de 30 segundos. La primera lectura
 revisa hasta 1.000 entradas; las siguientes se detienen al alcanzar el historial
 conocido, releyendo siempre la última página para detectar acciones agrupadas.
@@ -108,11 +92,10 @@ otras audiencias. Los nuevos agregados conservan el canal de origen; los totales
 antiguos sin esa información no se usan para construir respuestas públicas.
 Un período ambiguo pide aclaración en lugar de asumir que significa hoy.
 
-Con voz habilitada o deshabilitada, el registro privado de Discord conserva los límites internos
+El registro privado de Discord conserva los límites internos
 (sin canal configurado, usa `TARS_DATA_DIR/usage.json`):
-500 intentos de API, 100.000 tokens estimados y 3.600 segundos de audio por 24 horas
-móviles. Se permiten 20 transcripciones y 6 respuestas por minuto, separadamente;
-configurables con TARS_STT_REQUESTS_PER_MINUTE y TARS_LLM_REQUESTS_PER_MINUTE.
+500 intentos de API y 100.000 tokens estimados por 24 horas móviles.
+Se permiten 6 respuestas por minuto, configurables con TARS_LLM_REQUESTS_PER_MINUTE.
 Cada intento se guarda antes de llamar al proveedor; los fallos también cuentan.
 Cuando el proveedor informa `usage.total_tokens`, la reserva de tokens se ajusta
 al consumo real. Sin ese dato se conserva la estimación. Los registros antiguos
@@ -123,65 +106,25 @@ Después de cada consulta de IA, `[IA:saldo]` muestra `tokens_restantes`,
 Incluye errores y bloqueos. Usa el consumo real si está disponible y reservas
 conservadoras en los demás casos. No es el saldo de la cuenta Groq; `null` indica
 que el registro no está disponible o todavía no se ha cargado.
-El audio reserva al menos 10 segundos por llamada. No borres el registro de cuota.
+No borres el registro de cuota.
 Estos topes son preventivos; los límites reales de cada proveedor siguen aplicando.
 Mantén las cuentas en el plan gratuito: el bot no modifica la facturación.
-
-El filtro por energía descarta capturas sin señal suficiente antes de transcribir;
-las capturas aceptadas se envían completas, sin recortar la voz. No es un detector
-infalible de voz. Una continuación vacía no cierra la ventana
-restante ni genera avisos. Durante una pausa de cuota no se capturan más preguntas.
-Logs: `[voz:tiempos]` para latencia, `[voz:detector]` para recepción/detección y
-`[voz:pausa]` para el motivo y tiempo restante de un límite interno.
 
 ## Desarrollo
 
 Node 24.22.2 o revisión posterior de Node 24; `.node-version` fija la versión probada.
 `npm ci`, `npm run check`, `npm run test:coverage`, `npm audit --omit=dev`.
-Docker instala ffmpeg y eSpeak NG, además de los
-modelos de voz. `TARS_WAKE_ENABLED=false` vuelve a la activación manual;
-`TARS_TTS_ENGINE=espeak` usa la voz ligera. Render y los proveedores gratuitos
+El contenedor instala las dependencias de texto. Render y los proveedores gratuitos
 pueden suspender o limitar el servicio; no se garantiza disponibilidad permanente.
-
-La carga neural tiene hasta 45 segundos en segundo plano. Durante la carga se usa
-la voz ligera, pasando a la voz neural cuando está lista. La síntesis neural sigue
-limitada a 15 segundos por respuesta. Un paquete Opus inválido aislado se descarta
-sin perder el resto de la recepción; cinco inválidos consecutivos reportan error.
-`[voz:captura]` y `[voz:audio]` distinguen capturas vacías, errores y falta de señal;
-`[voz:error]` indica la etapa que falló, sin registrar conversaciones.
-`[voz:entrada]` mide preparación, conexión, carga del detector y tiempo total de entrada.
-Las comprobaciones de programas se ejecutan en paralelo y se reutilizan durante el
-despliegue; se solapan con la conexión. El saludo solo se envía cuando TARS está listo.
-
-Referencia de límites: https://console.groq.com/docs/rate-limits
-
-## Restauración selectiva
-
-Se conserva la base de voz del 10/10/2026 (996b3d0), con correcciones posteriores de
-privacidad, permisos, reproducción por fragmentos y límites. Las respuestas largas
-se reproducen completas en fragmentos; el registro solo incluye los que terminaron.
-Se mantienen colas independientes para texto y voz y cancelación de esperas.
-
-### Dos órdenes locales de voz
-
-Se reincorporan salida ("TARS, salte del canal", "TARS, desconéctate") y
-autodestrucción de broma ("TARS, autodestrucción"). Se conserva la activación
-manual /escuchar o Hey TARS; durante respuestas y cuenta regresiva se reciben
-órdenes prioritarias únicamente del interlocutor que inició la consulta o la cuenta.
-La cuenta reproduce 5, 4, 3, 2, 1 con un WAV de cinco segundos generado con la voz
-Davefx y ajustes existentes. No sintetiza ni consulta al modelo al ejecutarla.
-Repetir la orden no reinicia el plazo; una salida normal desconecta inmediatamente.
-Las negaciones no activan estas órdenes. El audio fallido no cancela la salida.
-Se registran inicio y desconexión como metadatos operacionales.
 
 ## Privacidad, permisos y disponibilidad
 
-La memoria conversacional se separa por servidor, canal, usuario y modalidad.
+La memoria conversacional se separa por servidor, canal y usuario.
 `reset` invalida también turnos pendientes y retira las intervenciones del usuario
 del contexto reciente en memoria. No elimina mensajes de Discord ni registros persistidos.
 Los logs operacionales no contienen preguntas, respuestas ni mensajes privados.
 `TARS_LOG_CHANNELS` permite un mapa JSON servidor→canal; cada destino debe pertenecer
-al mismo servidor. El registro de conversaciones de voz descrito arriba es independiente.
+al mismo servidor.
 
 Los roles de moderación se autorizan por ID en `config/moderation-roles.json`, con
 los IDs existentes de Líder y Sigma. `TARS_MODERATOR_ROLE_IDS` puede reemplazarlos
@@ -189,15 +132,13 @@ con una lista separada por comas. Revisa esa configuración si recreas los roles
 Desconectar requiere además Mover miembros en el canal y jerarquía válida para el
 solicitante y TARS. El dueño conserva su excepción de rol y jerarquía propia.
 
-Texto y voz tienen límites previos a las operaciones costosas: 6 solicitudes por
+Las consultas de texto tienen límites previos a las operaciones costosas: 6 solicitudes por
 usuario y 30 por servidor por minuto, además del presupuesto persistente del proveedor.
-Los límites de texto y voz son independientes; dentro de voz se comparten entre
-activación manual, detector, continuación y controles prioritarios.
 
 `/live` comprueba que el proceso HTTP responde. `/ready` devuelve 503 hasta que
 Discord esté conectado y se hayan validado actividad, recuperación de mutes y cuota;
 también deja de estar listo si las revisiones fallan o caducan. Docker lo usa para
 su healthcheck y prepara `/app/data` escribible por el usuario sin privilegios.
 Para persistencia local, monta un volumen en esa ruta. CI ejecuta las pruebas,
-audita dependencias y construye el contenedor con una prueba real de modelos,
-binarios y escritura sin red ni credenciales.
+audita dependencias y construye el contenedor con una prueba de carga de módulos
+y escritura sin red ni credenciales.

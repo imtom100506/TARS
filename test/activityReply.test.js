@@ -33,10 +33,6 @@ test('screenshot regression: four existing sessions with 15 seconds each are par
   assert.match(reply, /empatados/);
   assert.match(reply, /Persona 1 también ha estado participando/);
   assert.doesNotMatch(reply, /Registro parcial|2026|18:18| min|desconocid|tiempo-persona|Charla Chill 2/);
-  const spoken = activityReply(context, question, '1', { voice: true });
-  assert.ok(spoken.length <= 280);
-  assert.match(spoken, /Hay 4 personas en Charla Chill 1/);
-  assert.doesNotMatch(spoken, / min|registro parcial/i);
   assert.match(activityReply(await f.context('Quién está más activo en voz hoy'), 'Quién está más activo en voz hoy'), /empatados/);
 });
 
