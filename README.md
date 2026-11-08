@@ -1,6 +1,9 @@
 # TARS
 
-Bot de Discord con conversación por texto. Se despliega usando el Dockerfile
+Asistente de Discord con IA, resúmenes, estadísticas de actividad y moderación para la comunidad.
+
+Repositorio: [imtom100506/TARS](https://github.com/imtom100506/TARS).
+El paquete npm se llama `tars`. Se despliega usando el Dockerfile
 en Render; configura los secretos y opciones indicados en `.env.example`.
 No necesita una computadora personal encendida. Una sola instancia por token.
 

@@ -1,7 +1,7 @@
 {
-  "name": "discord-bot",
+  "name": "tars",
   "version": "1.0.0",
-  "description": "TARS: asistente y moderación para Discord",
+  "description": "TARS: asistente de Discord con IA, resúmenes, estadísticas de actividad y moderación para la comunidad.",
   "main": "src/index.js",
   "scripts": {
     "prestart": "node scripts/check-runtime.js",
