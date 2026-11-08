@@ -12,7 +12,7 @@ function startRadarPresence({ token = process.env.RADAR_DISCORD_TOKEN, logger = 
     allowedMentions: { parse: [] },
     presence: {
       status: 'online', afk: false,
-      activities: [{ name: 'Noticias y recursos · horario Chile', type: ActivityType.Watching }]
+      activities: [{ name: 'Noticias y recursos', type: ActivityType.Watching }]
     }
   });
   client.once(Events.ClientReady, () => logger.info('[RADAR] Conectado a Discord.'));
