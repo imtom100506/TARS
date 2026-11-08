@@ -4,7 +4,7 @@ Bot de Discord con conversación por texto. Se despliega usando el Dockerfile
 en Render; configura los secretos y opciones indicados en `.env.example`.
 No necesita una computadora personal encendida. Una sola instancia por token.
 
-Al conectarse, muestra una actividad de tipo Observando: «La comunidad | /ayuda».
+Al conectarse, muestra una actividad de tipo Observando: «Ayudando a la comunidad».
 Al iniciar también sincroniza la descripción de su aplicación en Discord:
 «Conversación, resúmenes y moderación para la comunidad.»
 Reinicia o redespliega el bot para aplicar estos cambios.

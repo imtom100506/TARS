@@ -34,7 +34,7 @@ const client = new Client({
   allowedMentions: { parse: [], repliedUser: false },
   presence: {
     status: 'online',
-    activities: [{ name: 'La comunidad | /ayuda', type: ActivityType.Watching }],
+    activities: [{ name: 'Ayudando a la comunidad', type: ActivityType.Watching }],
   },
 });
 const sendLog = createOperationalLog(client);
