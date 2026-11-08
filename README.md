@@ -158,3 +158,7 @@ su healthcheck y prepara `/app/data` escribible por el usuario sin privilegios.
 Para persistencia local, monta un volumen en esa ruta. CI ejecuta las pruebas,
 audita dependencias y construye el contenedor con una prueba de carga de módulos
 y escritura sin red ni credenciales.
+
+## Presencia opcional de RADAR
+
+Configura RADAR_DISCORD_TOKEN como secreto en Render para conectar el bot RADAR en el mismo proceso. No requiere intents privilegiados ni otra instancia de hosting. Si falta esa variable, TARS funciona como siempre y la presencia de RADAR queda desactivada. Las publicaciones de RADAR siguen ejecutándose en Cloudflare. El estado en línea dura mientras el servicio esté activo; el plan gratuito y el monitor externo no garantizan disponibilidad ininterrumpida.
