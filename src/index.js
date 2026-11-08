@@ -1,4 +1,5 @@
 require("dotenv").config();
+const radarPresence = require('./radarPresence.cjs').startRadarPresence();
 const { Client, GatewayIntentBits, Partials, REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
 const { askAI, clearHistory, setBudget } = require("./ai");
 const keepAlive = require("./keepAlive");
@@ -58,6 +59,7 @@ client.on('voiceStateUpdate', (oldState, newState) => {
   void activity.voice(oldState, newState).catch(activityError);
 });
 async function shutdown() {
+  radarPresence?.stop();
   client.destroy();
   await activity.flush().catch(activityError);
   process.exit(0);
