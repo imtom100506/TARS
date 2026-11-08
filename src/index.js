@@ -1,5 +1,5 @@
 require("dotenv").config();
-const { Client, GatewayIntentBits, Partials, REST, Routes, SlashCommandBuilder, PermissionFlagsBits } = require("discord.js");
+const { Client, GatewayIntentBits, Partials, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ActivityType } = require("discord.js");
 const { askAI, clearHistory, setBudget } = require("./ai");
 const keepAlive = require("./keepAlive");
 const { summaryCount, countFromText, splitResponse } = require("./commandUtils");
@@ -32,6 +32,10 @@ const client = new Client({
   ws: { large_threshold: 50 },
   rest: { timeout: 60000 },
   allowedMentions: { parse: [], repliedUser: false },
+  presence: {
+    status: 'online',
+    activities: [{ name: 'La comunidad | /ayuda', type: ActivityType.Watching }],
+  },
 });
 const sendLog = createOperationalLog(client);
 const health = { activity: 0, mutes: 0, budget: 0 };
@@ -128,6 +132,13 @@ client.once("ready", async () => {
     await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
   } catch (error) {
     console.error("Error registrando comandos:", error.message);
+  }
+  try {
+    const description = 'Conversación, resúmenes y moderación para la comunidad.';
+    const application = await client.application.fetch();
+    if (application.description !== description) await application.edit({ description });
+  } catch (error) {
+    console.error('No se pudo actualizar la descripción de TARS:', error.message);
   }
 });
 
