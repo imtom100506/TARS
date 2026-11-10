@@ -25,6 +25,31 @@ Groq genera las respuestas; Cloudflare es un respaldo opcional.
 
 ## Consumo y diagnóstico
 
+`!tars noticias relevantes de hoy` y `/tars` consultan el foro de noticias
+`1568787404339290202`. `!tars qué cursos hay de Python en biblioteca` consulta
+`1501665090792063067`. También admite «resume las noticias» y consultas de ambos
+foros. Lee mensajes, títulos, descripciones y campos de embeds, incluidos bots;
+cita los mensajes originales. Los adjuntos se identifican, pero no se descargan
+ni se leen páginas externas. Sin fecha, noticias usa hoy en America/Santiago y
+biblioteca busca publicaciones recientes sin restringirse a hoy. Admite días y
+rangos YYYY-MM-DD; la fecha corresponde a la publicación en Discord.
+
+Recorre hilos activos y hasta dos páginas de 100 archivados por foro, selecciona
+hasta 20 hilos por tema/actividad y lee hasta 200 mensajes por hilo (o canal de
+texto). Entrega hasta ocho publicaciones a la IA y solicita tres resultados con
+fuentes. Avisa de límites y errores; no promete búsqueda exhaustiva. Estas
+consultas no guardan contenido ni respuestas en la memoria conversacional.
+Solicitante y bot necesitan Ver canal y Leer historial. Solo muestra contenido
+público o del canal de origen de la consulta, siguiendo las restricciones de
+audiencia de actividad. La lectura se hace cuando se pregunta, no periódicamente.
+
+`!tars hasta qué hora se quedaron anoche aprox?` ahora consulta los eventos de voz
+guardados y responde directamente con la última salida o presencia observada,
+con fecha y hora de Chile. Usa la franja habitual 20:00–06:00; respeta canales
+visibles y menciones. No confunde la suma de minutos de varias personas con el
+fin de una llamada. Si faltan eventos, lo dice; no reconstruye noches sin registro.
+Reinicia o redespliega TARS para activar estas funciones.
+
 TARS puede responder `!tars cuánta gente hay en el server` o la misma pregunta en `/tars`.
 Consulta todos los miembros con sus presencias: personas sin bots, conectadas
 (en línea, ausentes y no molestar), desconectadas o invisibles y bots por separado.

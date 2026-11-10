@@ -3,9 +3,11 @@ const { day, period } = require('./serverActivity');
 const { hourlyQuery } = require('./activityHours');
 const { canReadAudit } = require('./accessPolicy');
 const { BoundedMap } = require('./boundedMap');
+const { isVoiceEndQuestion } = require('./activityQuery');
 const clean = text => String(text || '').replace(/[\r\n]/g, ' ').slice(0, 180);
 const normalize = text => String(text).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 function auditRequested(text) {
+  if (isVoiceEndQuestion(text)) return false;
   const q = normalize(text);
   if (/\b(comandos|commands|ayuda|help)\b/.test(q)) return false;
   if (/\b(quien|cuando)\b.*\b(?:se )?conecto(?: al| a| en)|\bquienes\b.*\bconectaron\b/.test(q)) return true;
@@ -30,6 +32,7 @@ function createServerAudit({ activity, now = Date.now, maxPages = 10, refreshMs 
     });
   }
   async function voice(oldState, newState) {
+    if (!newState.member || newState.member.user.bot) return;
     const changes = [];
     if (oldState.channelId !== newState.channelId) changes.push({
       kind: !oldState.channelId ? 'join' : !newState.channelId ? 'leave' : 'move',

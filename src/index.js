@@ -24,6 +24,8 @@ const { isActivityQuestion } = require('./activityQuery');
 const { createServerAudit, auditRequested } = require('./serverAudit');
 const { createServerMembers, isMemberCountQuestion } = require('./serverMembers');
 const serverMembers = createServerMembers();
+const { createChannelKnowledge, isContentQuestion } = require('./channelKnowledge');
+const channelKnowledge = createChannelKnowledge();
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages,
@@ -179,14 +181,15 @@ async function execute(ctx, command, argument) {
     return ctx.reply("Historial borrado. Empezamos de cero.");
   }
   const text = String(argument ?? "").trim();
-  if (command === 'tars' && auditRequested(text)) return (ctx.privateReply || ctx.reply)(await getAuditReply(ctx.guild, text, { requesterId: ctx.user.id, channelId: ctx.channel.id }));
+  const contentRequested = command === 'tars' && isContentQuestion(text);
+  if (command === 'tars' && !contentRequested && auditRequested(text)) return (ctx.privateReply || ctx.reply)(await getAuditReply(ctx.guild, text, { requesterId: ctx.user.id, channelId: ctx.channel.id }));
   if (command === 'borrar') return deleteMessages(ctx, text, { sendLog, clearContext: id => channelContext.delete(id) });
   const moderation = command === "tars" ? parseModeration(text) : null;
   if (moderation) return moderate(ctx, moderation, sendLog, textMutes);
   const directReply = command === "tars" ? commandReply(text) : null;
   if (directReply) return ctx.reply(directReply);
   const isKick = command === "tars" && /^(?:tars[, ]+)?(?:por favor[, ]+)?(kick|expulsa|saca|bota|desconecta)\b/i.test(text);
-  const isSummary = command === "resumir" || (command === "tars" && /\bresum(?:e|ir)\b/i.test(text));
+  const isSummary = command === "resumir" || (command === "tars" && !contentRequested && /\bresum(?:e|ir)\b/i.test(text));
   if (!ctx.guild && (command === "usuarios" || isKick || isSummary)) {
     return ctx.reply("Este comando solo está disponible dentro de un servidor.");
   }
@@ -212,6 +215,14 @@ async function execute(ctx, command, argument) {
   void sendLog("mensaje", { usuario: ctx.user.username, canal: ctx.channel.name || "privado", mensaje: text });
   const recent = channelContext.get(ctx.channel.id) || [];
   if (!allowRequest(ctx.user.id, ctx.guild?.id)) return ctx.reply('Dame un momento antes de hacer otra consulta.');
+  if (contentRequested) {
+    const knowledge = await channelKnowledge.read(ctx.guild, text, { requesterId: ctx.user.id, responseChannelId: ctx.channel.id });
+    if (knowledge.reply) return ctx.reply(knowledge.reply);
+    return ctx.reply(await askAI(ctx.user.id, text, {
+      conversationId: conversationScope({ guildId: ctx.guild?.id, channelId: ctx.channel.id, userId: ctx.user.id }),
+      context: knowledge.context, groundedContent: true,
+    }));
+  }
   if (isMemberCountQuestion(text)) return ctx.reply(await serverMembers.reply(ctx.guild));
   const serverContext = await serverMembers.context(ctx.guild);
   const activityContext = await getActivityContext(ctx.guild, text, ctx.user.id, ctx.channel.id);
@@ -242,7 +253,7 @@ client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand() || !interaction.isRepliable()) return;
   if (!commands.some(command => command.name === interaction.commandName)) return;
   const ephemeral = ["reset", "ayuda"].includes(interaction.commandName) ||
-    interaction.commandName === 'tars' && auditRequested(interaction.options.getString('mensaje') || '');
+    interaction.commandName === 'tars' && !isContentQuestion(interaction.options.getString('mensaje') || '') && auditRequested(interaction.options.getString('mensaje') || '');
   const ctx = {
     user: interaction.user, guild: interaction.guild, channel: interaction.channel, messageId: interaction.id,
     reply: async text => {

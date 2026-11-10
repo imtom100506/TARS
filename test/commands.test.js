@@ -53,6 +53,10 @@ function bot(activityContext = 'Actividad de voz: 3 participantes hoy.', options
       if (name === "./muteStore") return require("../src/muteStore");
       if (name === './activityReply') return require('../src/activityReply');
       if (name === './activityQuery') return require('../src/activityQuery');
+      if (name === './channelKnowledge' && options.knowledge) return {
+        isContentQuestion: require('../src/channelKnowledge').isContentQuestion,
+        createChannelKnowledge: () => ({ read: options.knowledge }),
+      };
       if (name === './serverAudit') return { auditRequested: require('../src/serverAudit').auditRequested,
         createServerAudit: () => ({ reply: async (...args) => { auditCalls.push(args); return options.auditReply || 'Consulta de auditoría; sin acciones.'; } }) };
       if (name === './serverActivity') return { createServerActivity: () => ({ message: async () => {}, context: async (...args) => { activityCalls.push(args); return activityContext; } }) };
@@ -97,6 +101,51 @@ function interaction(commandName, argument, guild = null) {
     async followUp(payload) { replies.push(payload); },
   };
 }
+
+test('news summaries and courses route to configured sources through slash and prefix, not chat summaries or audit', async () => {
+  const calls = [];
+  const { client, aiCalls, auditCalls, activityCalls } = bot('', { knowledge: async (...args) => {
+    calls.push(args); return { context: 'Publicaciones consultadas con fuentes' };
+  } });
+  const guild = activityGuild();
+  const request = interaction('tars', 'resume las noticias relevantes de hoy', guild);
+  await client.listeners('interactionCreate')[0](request);
+  await client.listeners('messageCreate')[0]({ content: '!tars qué cursos de Python hay en biblioteca',
+    author: { id: '1', username: 'tester' }, guild, channel: { id: '2', sendTyping: async () => {} }, reply: async () => {} });
+  assert.equal(calls.length, 2);
+  assert.equal(aiCalls.length, 2);
+  assert.equal(auditCalls.length, 0);
+  assert.equal(activityCalls.length, 0);
+  for (const call of aiCalls) {
+    assert.equal(call[2].groundedContent, true);
+    assert.match(call[2].context, /Publicaciones consultadas/);
+  }
+  assert.equal(calls[0][2].requesterId, '1');
+  assert.equal(calls[0][2].responseChannelId, '2');
+});
+
+test('empty or denied content bypasses AI rather than inventing news', async () => {
+  const { client, aiCalls } = bot('', { knowledge: async () => ({ reply: 'No hay publicaciones visibles.' }) });
+  const request = interaction('tars', 'noticias de hoy', activityGuild());
+  await client.listeners('interactionCreate')[0](request);
+  assert.equal(aiCalls.length, 0);
+  assert.equal(request.replies[0].content, 'No hay publicaciones visibles.');
+});
+
+test('screenshot question and disconnection phrasing use activity through both command paths', async () => {
+  const context = 'Datos\n' + JSON.stringify({ cobertura: {}, hoy: {}, finVoz: {
+    start: '2026-11-09T20', end: '2026-11-10T06', last: { at: Date.parse('2026-11-10T05:42:00Z'), kind: 'leave' },
+  } });
+  const { client, aiCalls, auditCalls } = bot(context);
+  const request = interaction('tars', 'a qué hora se desconectaron de voz anoche', activityGuild());
+  await client.listeners('interactionCreate')[0](request);
+  const replies = [];
+  await client.listeners('messageCreate')[0]({ content: '!tars hasta que hora se quedaron anoche aprox?',
+    author: { id: '1', username: 'tester' }, guild: activityGuild(), channel: { id: '2', sendTyping: async () => {} }, reply: async payload => replies.push(payload) });
+  assert.match(request.replies[0].content, /02:42/);
+  assert.match(replies[0].content, /02:42/);
+  assert.equal(aiCalls.length, 0); assert.equal(auditCalls.length, 0);
+});
 
 test("single login, DM guards, and slash long replies", async () => {
   const { client, logins, aiCalls, budgets, readiness } = bot();

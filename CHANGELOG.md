@@ -1,5 +1,15 @@
 # Changelog de TARS
 
+## 2026-11-10
+
+- Consultas bajo demanda de noticias y cursos en sus foros configurados, con
+  publicaciones activas/archivadas, embeds de bots, fechas de Chile y enlaces.
+- Separación de «resume las noticias» respecto del resumen del chat actual;
+  validación de permisos y avisos explícitos de lecturas parciales o fallidas.
+- Reconocimiento de «hasta qué hora se quedaron anoche», con respuesta desde
+  los eventos de voz guardados, sin inventar la hora de término de una llamada.
+- Prueba REST de solo lectura: `node scripts/check-channel-knowledge.js`.
+
 ## 2026-10-10
 
 - Comando sin IA `!borrar cantidad` / `!borrar @usuario cantidad`, también `/borrar`:

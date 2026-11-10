@@ -43,7 +43,7 @@ test('merged move entries are refreshed/upserted, never attributed to a target D
 });
 test('voice joins/leaves/moves and self/server mute changes are independent of audit actors', async () => {
   const f = fixture();
-  const state = (channelId, extra = {}) => ({ id: '2', guild: f.g, channelId, selfMute: false, serverMute: false, selfDeaf: false, serverDeaf: false, ...extra });
+  const state = (channelId, extra = {}) => ({ id: '2', guild: f.g, member: { user: { bot: false } }, channelId, selfMute: false, serverMute: false, selfDeaf: false, serverDeaf: false, ...extra });
   await f.audit.voice(state(null), state('c1'));
   await f.audit.voice(state('c1'), state('c2'));
   await f.audit.voice(state('c2'), state('c2', { selfMute: true, serverDeaf: true }));

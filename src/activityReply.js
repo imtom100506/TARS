@@ -2,6 +2,7 @@
 const normalize = text => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const { naturalActivity, asksAboutSelf } = require('./naturalActivity');
 const { isActivityQuestion } = require('./activityQuery');
+const { voiceEndReply } = require('./voiceEnd');
 function duration(ms) {
   if (ms > 0 && ms < 1000) return 'menos de 1 s';
   const seconds = Math.floor(ms / 1000);
@@ -17,6 +18,7 @@ function activityReply(context, question, requesterId) {
   try { data = JSON.parse(context.split('\n').at(-1)); }
   catch { return null; }
   if (!data.cobertura || !data.hoy) return null;
+  if (data.finVoz) return voiceEndReply(data.finVoz);
   const stats = data.periodoConsultado || data.hoy;
   if (data.consultaHoraria) {
     const h = data.consultaHoraria;

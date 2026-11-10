@@ -1,6 +1,8 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { HOUR, hourKey, hourLabel, hourlyQuery } = require('./activityHours');
+const { isVoiceEndQuestion } = require('./activityQuery');
+const { voiceEndObservation } = require('./voiceEnd');
 
 const MARKER = 'TARS · Actividad del servidor · No borrar';
 const zone = 'America/Santiago';
@@ -273,6 +275,8 @@ function createServerActivity({ store, now = Date.now, dailyRetentionDays = Numb
         'Cobertura parcial: no incluye antes del registro ni períodos sin conexión del bot; no inventes datos faltantes ni interpretes ausencia de registro como cero real. ' +
         'Para fechas ambiguas pide fechas YYYY-MM-DD. Rankings limitados a 3; desglose diario limitado a últimos 14 días registrados.\n' +
         JSON.stringify({ historyRestricted, scopedHistory: historyRestricted,
+          ...(isVoiceEndQuestion(question) ? { finVoz: voiceEndObservation({ events: record.events || [],
+            sessions: sessions.values(), guild: g, question, requesterId, visible, from, to, hourly, now: time }) } : {}),
           cobertura: { registroDesde: record.since, consultadoEn: time, zona: zone, parcial: true,
           diasRetenidos: dailyRetentionDays, historicoDisponibleDesde: [day(record.since), cutoffDay()].sort().at(-1),
           sesionesActualesConInicioDesconocido: current.filter(s => sessions.get(key(g.id, s.id))?.unknownStart !== false).length },
