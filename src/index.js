@@ -172,6 +172,7 @@ async function summarize(ctx, count) {
 }
 
 async function execute(ctx, command, argument) {
+  void sendLog("mensaje", { usuario: ctx.user.username, mensaje: ctx.input ?? `/${command}${argument == null ? '' : ` ${argument}`}` });
   if (command === "ping") return ctx.reply(`Pong! Latencia: **${client.ws.ping}ms**`);
   if (command === "ayuda") return ctx.reply(HELP);
   if (command === "reset") {
@@ -212,7 +213,6 @@ async function execute(ctx, command, argument) {
     return summarize(ctx, count);
   }
   if (!text) return ctx.reply("Escribe algo después de `!tars`");
-  void sendLog("mensaje", { usuario: ctx.user.username, canal: ctx.channel.name || "privado", mensaje: text });
   const recent = channelContext.get(ctx.channel.id) || [];
   if (!allowRequest(ctx.user.id, ctx.guild?.id)) return ctx.reply('Dame un momento antes de hacer otra consulta.');
   if (contentRequested) {
@@ -230,7 +230,6 @@ async function execute(ctx, command, argument) {
     conversationId: conversationScope({ guildId: ctx.guild?.id, channelId: ctx.channel.id, userId: ctx.user.id }),
     context: `${serverContext}\n${activityContext}\nUsuario que pregunta: ${ctx.user.username} (${ctx.user.id}).\n\nContexto reciente del canal:\n${recent.join("\n")}`,
   });
-  void sendLog("respuesta", { usuario: ctx.user.username, respuesta: response });
   await ctx.reply(response);
 }
 
@@ -262,13 +261,13 @@ client.on("interactionCreate", async interaction => {
         if (interaction.replied) await interaction.followUp(payload);
         else if (interaction.deferred) await interaction.editReply(payload);
         else await interaction.reply(payload);
+        if (!ephemeral) void sendLog("respuesta", { usuario: interaction.user.username, respuesta: chunk });
       }
     },
   };
   return sendLog.withContext(ctx, async () => {
   try {
     await interaction.deferReply(ephemeral ? { flags: 64 } : {});
-    void sendLog("slash", { usuario: ctx.user.username, comando: interaction.commandName, canal: ctx.channel?.name || "privado" });
     const argument = interaction.commandName === 'borrar' ? `${interaction.options.getUser('usuario') ? `<@${interaction.options.getUser('usuario').id}> ` : ''}${interaction.options.getInteger('cantidad')}` :
       interaction.commandName === "resumir" ? interaction.options.getInteger("cantidad") :
       interaction.commandName === "usuarios" ? interaction.options.getString("rol") :
@@ -284,10 +283,11 @@ client.on("messageCreate", async message => {
   channelContext.add(message.channel.id, message.author.id, `${message.author.username}: ${message.content}`);
   const match = message.content.trim().match(/^!(tars|reset|ping|ayuda|resumir|usuarios|borrar)(?:\s+([\s\S]*))?$/i);
   const ctx = {
-    user: message.author, guild: message.guild, channel: message.channel, messageId: message.id,
+    user: message.author, guild: message.guild, channel: message.channel, messageId: message.id, input: message.content,
     reply: async text => {
       for (const chunk of splitResponse(text)) {
         await message.reply({ content: chunk, allowedMentions: { parse: [], repliedUser: false } });
+        void sendLog("respuesta", { usuario: message.author.username, respuesta: chunk });
       }
     },
   };

@@ -9,6 +9,20 @@ function metadata(key, value) {
   if (TAGS.has(key)) return ['string', 'number'].includes(typeof value) && /^[a-z0-9_-]{1,48}$/i.test(String(value)) ? value : null;
   return null;
 }
+function codeBlocks(text) {
+  const blocks = [];
+  let chunk = '';
+  for (const character of text) {
+    // Split embedded fences without altering the literal logged text.
+    if (chunk.length + character.length > 1900 || character === '`' && chunk.endsWith('``')) {
+      blocks.push('```\n' + chunk + '\n```');
+      chunk = '';
+    }
+    chunk += character;
+  }
+  if (chunk) blocks.push('```\n' + chunk + '\n```');
+  return blocks;
+}
 function createOperationalLog(client, env = process.env) {
   const context = new AsyncLocalStorage();
   let pending = 0;
@@ -29,7 +43,14 @@ function createOperationalLog(client, env = process.env) {
       if (channel?.guildId !== guildId || !channel.isTextBased() || !channel.send) return;
       const fields = Object.entries({ ...data, servidor_id: guildId }).map(([key, value]) => [key, metadata(key, value)])
         .filter(([, value]) => value !== null).map(([key, value]) => `${key}: ${value}`).join('\n');
-      await channel.send({ content: `**${type}**\n${fields}`.slice(0, 1800), allowedMentions: { parse: [] } });
+      const content = type === 'mensaje'
+        ? `user: ${data.usuario ?? ''}\nmessage: ${data.mensaje ?? ''}`
+        : type === 'respuesta'
+          ? `TARS's response to ${data.usuario ?? ''}: ${data.respuesta ?? ''}`
+          : `${type}\n${fields}`;
+      for (const block of codeBlocks(content)) {
+        await channel.send({ content: block, allowedMentions: { parse: [] } });
+      }
     } catch { console.warn('[log] No se pudo guardar metadata operacional.'); }
     finally { pending--; }
   };
